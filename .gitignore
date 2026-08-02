@@ -34,3 +34,16 @@ package-lock.json
 *.tmp
 *.bak
 *.swp
+
+# Temporary workspace projects & scratchpads
+temp/*
+!temp/README.md
+!temp/.gitkeep
+
+tests/temp/*
+!tests/temp/README.md
+!tests/temp/.gitkeep
+
+docs/temp/*
+!docs/temp/README.md
+!docs/temp/.gitkeep

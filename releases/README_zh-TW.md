@@ -1,24 +1,24 @@
 # LoopFlow Rhino-to-Blender Sync — Releases
 
-[▶ YouTube 影片教學](https://www.youtube.com/@LoopFlow) · [▶ 專案首頁](https://github.com/ChihyuTsai-Oli/LoopFlow_Rhino-to-Blender-Sync)
+[YouTube 影片教學](https://www.youtube.com/@LoopFlow) · [專案首頁](https://github.com/ChihyuTsai-Oli/LoopFlow_Rhino-to-Blender-Sync)
 
 ---
 
 ## 安裝說明
 
-### 🍎 macOS Rhino 8
+### macOS Rhino 8
 1. 下載並解壓縮發行包。
 2. 在 Terminal 執行 `install_LoopFlow_R2B.command`，自動安裝腳本至 `~/Library/Application Support/McNeel/Rhinoceros/8.0/scripts/LoopFlow_R2B/`。
 3. 將 **`LoopFlow_R2B_Mac.rhc`** 拖曳至 Rhino 視窗開啟工具列。
 
-### 🪟 Windows Rhino 8
+### Windows Rhino 8
 1. 下載並解壓縮發行包。
 2. 執行 `install_LoopFlow_R2B.bat`，自動安裝腳本至 `%appdata%\McNeel\Rhinoceros\8.0\scripts\LoopFlow_R2B\`。
 3. 將 **`LoopFlow_R2B.rhc`** 拖曳至 Rhino 視窗開啟工具列。
 
 ---
 
-### 🎨 Blender 端（Addons）
+### Blender 端（Addons）
 1. 在 Blender 中選擇 **Edit > Preferences > Add-ons > Install**。
 2. 安裝以下 Addon ZIP 檔：
    - `LoopFlow_import_3dm.zip`：3DM 模型匯入器（必需）

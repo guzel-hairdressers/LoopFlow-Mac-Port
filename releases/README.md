@@ -1,24 +1,24 @@
 # LoopFlow Rhino-to-Blender Sync — Releases
 
-[▶ Watch on YouTube](https://www.youtube.com/@LoopFlow) · [▶ Project Page](https://github.com/ChihyuTsai-Oli/LoopFlow_Rhino-to-Blender-Sync)
+[Watch on YouTube](https://www.youtube.com/@LoopFlow) · [Project Page](https://github.com/ChihyuTsai-Oli/LoopFlow_Rhino-to-Blender-Sync)
 
 ---
 
 ## Installation Instructions
 
-### 🍎 macOS Rhino 8
+### macOS Rhino 8
 1. Extract the release files.
 2. Run `install_LoopFlow_R2B.command` in Terminal to install the Python scripts to `~/Library/Application Support/McNeel/Rhinoceros/8.0/scripts/LoopFlow_R2B/`.
 3. Drag **`LoopFlow_R2B_Mac.rhc`** into Rhino 8 to open the toolbar.
 
-### 🪟 Windows Rhino 8
+### Windows Rhino 8
 1. Extract the release files.
 2. Run `install_LoopFlow_R2B.bat` to install scripts to `%appdata%\McNeel\Rhinoceros\8.0\scripts\LoopFlow_R2B\`.
 3. Drag **`LoopFlow_R2B.rhc`** into Rhino 8 to open the toolbar.
 
 ---
 
-### 🎨 Blender Side (Addons)
+### Blender Side (Addons)
 1. In Blender, go to **Edit > Preferences > Add-ons > Install**.
 2. Install the following addons as ZIP files:
    - `LoopFlow_import_3dm.zip` — 3DM model importer (Required)
