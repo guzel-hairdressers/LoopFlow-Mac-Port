@@ -55,8 +55,10 @@ def reset_all_dict(context):
 
 def get_dict_for_base(base):
     global all_dict
-    # Derive the collection type string from repr, e.g. 'objects'
-    t = repr(base).split(',')[1]
+    try:
+        t = repr(base).split(',')[1].strip()
+    except Exception:
+        t = str(type(base))
     return all_dict.setdefault(t, dict())
 
 def get_or_create_iddata(base : bpy.types.bpy_prop_collection, tag_dict: Dict[str, Any], obdata : bpy.types.ID) -> bpy.types.ID:

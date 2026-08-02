@@ -85,11 +85,17 @@ def FastLinkExport():
         layer_manifest = {}
         for layer in sc.doc.Layers:
             try:
-                layer_manifest[layer.FullPath] = {
+                info = {
                     "visible": bool(layer.IsVisible),
                     "effective_visible": bool(layer.IsEffectiveVisible),
-                    "color": [layer.Color.R, layer.Color.G, layer.Color.B]
+                    "color": [layer.Color.R, layer.Color.G, layer.Color.B],
+                    "full_path": str(layer.FullPath),
+                    "name": str(layer.Name),
+                    "id": str(layer.Id)
                 }
+                layer_manifest[str(layer.Id)] = info
+                layer_manifest[str(layer.FullPath)] = info
+                layer_manifest[str(layer.Name)] = info
             except Exception:
                 pass
 
@@ -107,10 +113,10 @@ def FastLinkExport():
         }
         save_r2b_sync_metadata(meta)
 
-        rs.Prompt(f"LiveLink Fast Link: Exported full model ({obj_count} objects across all layers) in {t_elapsed}s")
+        rs.Prompt(f"LiveLink Fast Sync: Exported full model ({obj_count} objects across all layers) in {t_elapsed}s")
 
     except Exception as e:
-        rs.MessageBox(f"Fast Link Error: {e}", 0, "LiveLink Error")
+        rs.MessageBox(f"Fast Sync Error: {e}", 0, "LiveLink Error")
 
 if __name__ == "__main__":
     FastLinkExport()

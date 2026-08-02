@@ -71,6 +71,13 @@ def populate_instance_definitions(context, model, toplayer, layername, options, 
         columns = int(sqrt(len(model.InstanceDefinitions)))
         grid = options.get("import_instances_grid", 10.0) * scale
 
+    # Build O(1) hash table mapping rhid -> Blender object
+    rhid_to_ob = {}
+    for ob in context.blend_data.objects:
+        rhid = ob.get('rhid', None)
+        if rhid:
+            rhid_to_ob[str(rhid)] = ob
+
     for idef in model.InstanceDefinitions:
         block_name = f"[Block] {idef.Name}" if idef.Name else f"Block {idef.Id}"
         tags = utils.create_tag_dict(idef.Id, block_name, None, None, True)
@@ -82,11 +89,12 @@ def populate_instance_definitions(context, model, toplayer, layername, options, 
             parent.instance_offset = offset
             count += 1
 
-        for ob in context.blend_data.objects:
-            for guid in objectids:
-                if ob.get('rhid', None) == str(guid):
-                    try:
-                        if ob.name not in parent.objects:
-                            parent.objects.link(ob)
-                    except Exception:
-                        pass
+        for guid in objectids:
+            str_guid = str(guid)
+            if str_guid in rhid_to_ob:
+                ob = rhid_to_ob[str_guid]
+                try:
+                    if ob.name not in parent.objects:
+                        parent.objects.link(ob)
+                except Exception:
+                    pass

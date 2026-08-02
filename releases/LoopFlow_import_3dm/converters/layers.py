@@ -75,7 +75,9 @@ def handle_layers(context, model, toplayer, layerids, materials, update, import_
         layerids[lid] = lcol
         layerids[l.Index] = lcol
         
-        # Store own lightbulb state on collection data for un-exclude memory
+        lcol["rhid"] = str(l.Id)
+        lcol["rhino_full_path"] = str(l.FullPath)
+        lcol["rhino_layer_name"] = str(l.Name)
         lcol["rhino_own_visible"] = l.Visible
         
         layer_visibility[lcol.name] = {

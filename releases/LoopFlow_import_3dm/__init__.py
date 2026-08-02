@@ -13,7 +13,7 @@ Location           : 3D Viewport sidebar (N-Panel > LoopFlow 3dm > Rhino Live Li
 
 bl_info = {
     "name": "Import Rhinoceros 3D (R2B Pro)",
-    "author": "Nathan 'jesterKing' Letwory, Joel Putnam, Tom Svilans, Lukas Fertig, Bernd Moeller, Workflow Partner",
+    "author": "Ruslan F, Chihyu Tsai, Nathan 'jesterKing' Letwory, Joel Putnam, Tom Svilans",
     "version": (0, 0, 52),
     "blender": (5, 1, 0),
     "location": "N-Panel > LoopFlow 3dm",
@@ -23,6 +23,13 @@ bl_info = {
 
 import bpy
 import os
+import sys
+
+# Add addon directory to sys.path for bundled rhino3dm module
+addon_dir = os.path.dirname(os.path.abspath(__file__))
+if addon_dir not in sys.path:
+    sys.path.insert(0, addon_dir)
+
 import re
 import json
 import mathutils
@@ -321,8 +328,8 @@ class RHINO_OT_ShowHelp(bpy.types.Operator):
         layout = self.layout
         box = layout.box()
         box.label(text="[Model Sync]", icon='MESH_DATA')
-        box.label(text="1. Rhino: Click Fast Link (⚡️ icon) or Advanced Link (⚙️ icon)")
-        box.label(text="2. Blender: Click 'Update Models' in LoopFlow sidebar panel")
+        box.label(text="1. Rhino: Click Fast Sync or Advanced Sync")
+        box.label(text="2. Blender: Click 'Model Sync' in LoopFlow sidebar panel")
         layout.separator()
         box2 = layout.box()
         box2.label(text="[Auto Material & Lights]", icon='LIGHT')
@@ -407,7 +414,7 @@ class RHINO_OT_QuickSync(bpy.types.Operator):
                     break
 
         if not target_path or not os.path.exists(target_path):
-            self.report({'ERROR'}, f"No active sync file found in {DATA_DIR}. Please run Fast Link or Advanced Link in Rhino first!")
+            self.report({'ERROR'}, f"No active sync file found in {DATA_DIR}. Please run Fast Sync or Advanced Sync in Rhino first!")
             return {'CANCELLED'}
 
         context.scene.rhino_update_path = target_path
@@ -447,7 +454,8 @@ class RHINO_OT_QuickSync(bpy.types.Operator):
             import_curves=getattr(context.scene, "rhino_import_curves", False),
             import_meshes=getattr(context.scene, "rhino_import_meshes", True),
             weld_meshes=getattr(context.scene, "rhino_weld_meshes", True),
-            update_materials=self.update_mats
+            update_materials=self.update_mats,
+            is_update=not self.update_mats
         )
 
         merged = merge_duplicate_materials()
@@ -479,6 +487,7 @@ class Import3dm(bpy.types.Operator, ImportHelper):
     import_meshes: bpy.props.BoolProperty(name="Meshes", default=True)
     weld_meshes: bpy.props.BoolProperty(name="Weld Meshes", default=True)
     update_materials: bpy.props.BoolProperty(name="Update Materials", default=False)
+    is_update: bpy.props.BoolProperty(name="Is Update", default=False)
 
     def execute(self, context):
         options = self.as_keywords(ignore=("filter_glob",))
@@ -499,13 +508,9 @@ class RHINO_PT_QuickUpdate(bpy.types.Panel):
         layout.label(text="Model Sync", icon='MESH_DATA')
         box_model = layout.box()
 
-        col = box_model.column()
-        col.scale_y = 1.2
-        col.operator("import_3dm.quick_sync", text="Import Models", icon='IMPORT').update_mats = True
-
         col_upd = box_model.column()
-        col_upd.scale_y = 1.3
-        col_upd.operator("import_3dm.quick_sync", text="Update Models", icon='FILE_REFRESH').update_mats = False
+        col_upd.scale_y = 1.4
+        col_upd.operator("import_3dm.quick_sync", text="Model Sync", icon='FILE_REFRESH').update_mats = False
 
         row_opts = box_model.row(align=True)
         row_opts.prop(scene, "rhino_weld_meshes", text="Weld Meshes")

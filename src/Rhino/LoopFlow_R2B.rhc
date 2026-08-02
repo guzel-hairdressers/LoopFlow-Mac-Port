@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <RhinoUI major_ver="1" minor_ver="0" created_on_platform="Windows" created_on_rhino_version="8.24.25281.15002" name="Standard Toolbars">
   
   <name>
@@ -1001,10 +1001,10 @@
               <script>_-ScriptEditor _Run "%appdata%\McNeel\Rhinoceros\8.0\scripts\LoopFlow_R2O\Py\LiveLink_R2O_Models.py"</script>
             </macro>
             <macro guid="77555fb9-6c14-4480-8cd1-c32d4b6f559d" modified="True" bitmap_guid="585d2cee-ef43-48cf-abe8-43fbc7f6b7ec">
-              <button_text>Fast Link</button_text>
-              <menu_text>Fast Link</menu_text>
-              <help_text>Fast Link</help_text>
-              <tooltip>Fast Link (Left-Click: Full Model | Right-Click: Selected Objects)</tooltip>
+              <button_text>Fast Sync</button_text>
+              <menu_text>Fast Sync</menu_text>
+              <help_text>Fast Sync</help_text>
+              <tooltip>Fast Sync (Left-Click: Full Model | Right-Click: Selected Objects)</tooltip>
               <script>_-ScriptEditor _Run "%appdata%\McNeel\Rhinoceros\8.0\scripts\LoopFlow_R2B\Py/LiveLink_R2B_Fast.py"</script>
             </macro>
             <macro guid="c69b13fa-4f39-4dfa-8faa-b584631c7ec1" modified="True" bitmap_guid="4ee37149-7415-4e18-ac49-d814612be853">

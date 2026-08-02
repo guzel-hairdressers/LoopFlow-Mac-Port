@@ -137,6 +137,12 @@ def save_r2b_sync_metadata(meta_dict):
     try:
         with open(SYNC_JSON_FILE, 'w', encoding='utf-8') as f:
             json.dump(meta_dict, f, indent=2, ensure_ascii=False)
+
+        act_file = meta_dict.get("active_filepath", "")
+        if act_file and os.path.exists(os.path.dirname(act_file)):
+            local_json = os.path.join(os.path.dirname(act_file), "R2B_Sync.json")
+            with open(local_json, 'w', encoding='utf-8') as f:
+                json.dump(meta_dict, f, indent=2, ensure_ascii=False)
     except Exception as e:
         print("LoopFlow Config Error saving R2B_Sync.json: {}".format(e))
 
