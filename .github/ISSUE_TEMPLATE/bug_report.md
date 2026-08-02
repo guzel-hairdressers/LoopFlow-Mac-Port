@@ -1,38 +1,41 @@
----
 name: Bug Report
-about: Something isn't working as expected
-title: "[BUG] "
+description: Create a report to help us improve LoopFlow
+title: '[BUG] '
 labels: bug
-assignees: ''
----
+assignees: guzel-hairdressers
 
-## Describe the Bug
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
 
-A clear description of what went wrong.
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - macOS (Apple Silicon M1/M2/M3/M4)
+        - macOS (Intel)
+        - Windows 10/11 (x64)
+    validations:
+      required: true
 
-## Steps to Reproduce
+  - type: input
+    id: versions
+    attributes:
+      label: Software Versions
+      description: e.g. Rhino 8.12 + Blender 5.2.0
+    validations:
+      required: true
 
-1. 
-2. 
-3. 
-
-## Expected Behavior
-
-What did you expect to happen?
-
-## Actual Behavior
-
-What actually happened? Paste any error messages here.
-
-## Environment
-
-| | |
-|---|---|
-| Rhino version | e.g. 8.12 |
-| Blender version | e.g. 4.x |
-| LoopFlow_Rhino-to-Blender-Sync version | e.g. v0.1.0 |
-| OS | e.g. Windows 11 |
-
-## Screenshots / Files
-
-If applicable, add screenshots or attach relevant files to help explain the problem.
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps To Reproduce
+      description: Steps to reproduce the behavior.
+    validations:
+      required: true

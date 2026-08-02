@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.0.0] - 2026-08-01
+
+### Cross-Platform macOS & Windows Support
+- Added native macOS Rhino 8 toolbar (`LoopFlow_R2B_Mac.rhc`) and auto-installer (`install_LoopFlow_R2B.command`).
+- Retained Windows Rhino 8 toolbar (`LoopFlow_R2B.rhc`) and auto-installer (`install_LoopFlow_R2B.bat`).
+
+### Pure Vector SVG Toolbar Icons
+- Refactored all 5 core toolbar icons (`Fast Link`, `Advanced Link`, `Camera Sync`, `Light Sync`, `Config`) into pure vector SVG graphics compatible with Rhino 8 Mac's parser.
+- Added pure vector `Blender Test` toolbar button.
+- Embedded dual Light Mode (`<light_svg>`) and Dark Mode (`<dark_svg>`) vector renders.
+
+### Advanced Link & Command Options Bar
+- Implemented Rhino's Left Command Options Bar workflow (`Rhino.Input.Custom.GetOption()`).
+- Added toggleable `ExportCurves=Yes/No` and `ExportAllLayers=Yes/No` sidebar controls.
+- Integrated native layer tree picker (`rs.GetLayer()`) for selective model layer export.
+- Tracked hidden layer (`hidden_layers`) and hidden object (`hidden_objects`) metadata so Blender automatically excludes hidden layers and hides hidden objects in the viewport.
+
+---
+
 ## [1.0.0] - 2026-04-28
 
 First public release.

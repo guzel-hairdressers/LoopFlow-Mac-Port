@@ -1,0 +1,12 @@
+rhino3dm-8.32.0.dist-info/INSTALLER,sha256=zuuue4knoyJ-UwPPXg8fezS7VCrXJQrAP7zeNuwvFQg,4
+rhino3dm-8.32.0.dist-info/METADATA,sha256=ed2v4c0unCHe8GigzoXnZHTYI1rDz9BLeYir4J1STkE,2119
+rhino3dm-8.32.0.dist-info/RECORD,,
+rhino3dm-8.32.0.dist-info/REQUESTED,sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU,0
+rhino3dm-8.32.0.dist-info/WHEEL,sha256=ZgtxjTfqCASisg61cg78CSt7Mnu-nMpCaGm1x6r-2hc,114
+rhino3dm-8.32.0.dist-info/licenses/LICENSE,sha256=9XoVSsxTQxK357K_8pdIvO9eEgJxO4kXWaAn98AV8L0,1083
+rhino3dm-8.32.0.dist-info/top_level.txt,sha256=TeHdahSufn5ZzZHnoG6L4YPm3U9UQHwpNnI1mOMvAfk,9
+rhino3dm/__init__.py,sha256=71kRKVFmWiIUssb0gBwP3JqYQM0ONIee6PoPfqjhuYk,128
+rhino3dm/__init__.pyi,sha256=825ZMd-_r2IkqbvClk6_WXzY9C7eBdkfRODxxtCqf4Q,65359
+rhino3dm/__pycache__/__init__.cpython-313.pyc,,
+rhino3dm/_rhino3dm.cpython-313-darwin.so,sha256=J2EVE0rLaJYLwXDxfCblbo6AW-wUzIhVCh_eXZkjAi4,13647440
+rhino3dm/py.typed,sha256=HuLmVkNu_p4Z7NWxnBqRwLkHKmQ7FX_NttG4bJ3T1xs,24

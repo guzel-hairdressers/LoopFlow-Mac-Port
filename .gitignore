@@ -1,45 +1,36 @@
-# 忽略所有檔案
-*
-*/
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
 
-# 但保留以下檔案和資料夾
+# Python bytecode & cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
 
-# 根目錄必要檔案
-!.gitignore
-!README.md
-!README_zh-TW.md
-!LICENSE
-!CREDITS.md
-!CHANGELOG.md
-!build.ps1
-!todo.md
+# Virtual environments & IDEs
+.venv/
+venv/
+ENV/
+.idea/
+.vscode/
+.gemini/
+scratch/
+*.log
 
-# GitHub 設定資料夾
-!.github/
-!.github/**/
-!.github/**/*.md
-!.github/**/*.yml
-!.github/**/*.yaml
+# Node & package leftovers
+node_modules/
+package-lock.json
 
-# 文檔資料夾
-!docs/
-!docs/**/
-!docs/*.md
-!docs/**/*.md
-!docs/**/.gitkeep
-!docs/*.html
-!docs/**/*.svg
-
-# 發佈資料夾（pre-release：追蹤全部檔案）
-!releases/
-!releases/**/
-!releases/**
-
-# 系統排除
-**/__pycache__/
-**/*.pyc
-**/.DS_Store
-**/Thumbs.db
-
-# 本機開發檔案（不發布）
-# .cursor/、memo.md、GitHub_Commands.md 不追蹤，請自行保管於本機
+# Temporary & build scratch files
+*.tmp
+*.bak
+*.swp

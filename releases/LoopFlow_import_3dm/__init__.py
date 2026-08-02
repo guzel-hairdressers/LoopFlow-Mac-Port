@@ -3,66 +3,21 @@
 ====================================
 Import Rhinoceros 3D (R2B Pro)
 ====================================
-Version            : v5.0
-Date               : 2026-04-27
+Version            : v5.2
+Date               : 2026-07-31
 Author             : Cursor + Claude Sonnet 4.6
-Environment        : Blender 5.1.0 / Python 3.13
+Environment        : Blender 5.1.0+ / Python 3.13
 Location           : 3D Viewport sidebar (N-Panel > LoopFlow 3dm > Rhino Live Link)
-
-[System Overview]
-This addon is the Blender-side receiver for the "Rhino into Blender" workflow.
-It breaks the barrier between the two applications by providing seamless geometry
-updates, dual-JSON performance sync, fully automated light assembly, and BIM
-auto-material assignment.
-
-[Core Features & Operations]
-
-1. Seamless Geometry Update (Model Sync & State Memory)
-   - Supports first-time import and subsequent updates. On update it deduplicates
-     automatically and perfectly preserves any manually configured "exclude, hide,
-     render-off" states and Bounds display mode set inside Blender.
-   - Usage: on the Rhino side run LiveLink_R2B_Models.py (choose a layer to produce R2B.3dm);
-     on the Blender side click [Import Models] or [Update Models].
-
-2. Dual-JSON Engine: Camera & Light Sync
-   - Camera: background timer polls R2B_Camera_Sync.json every CAMERA_POLL_INTERVAL seconds;
-     extremely lightweight, keeps 60 FPS unaffected.
-   - Lights: manual update, reads R2B_Light_Sync.json.
-   - Precise alignment & orphan cleanup: forces displaced fixtures back to their correct
-     positions. Built-in "life-link" engine — when a Rhino point is deleted, Blender
-     cleanly removes the corresponding object, eliminating StructRNA ghost errors.
-   - Usage:
-     - Create COL_FIXTURES (for fixture models) and COL_LIGHTING (for lights), and set up templates.
-     - Set the [Sync Folder] in the panel to the directory containing the JSON files.
-     - Camera: click [Start Camera Sync] to activate background sync.
-     - Lights: after exporting points from Rhino, click [Sync Rhino Lights] for a one-click update.
-
-3. Auto Basic Material Assigner
-   - General and specialised binding: strips prefixes and intelligently assigns materials
-     scene-wide; forces all objects (including empty material slots) inside LAYER_SUFFIX_LT
-     nested layers to bind the designated emissive material.
-   - Stamp & prototype mechanism: built-in prototype lookup. If a model update generates
-     an unstamped .001 duplicate, the script automatically re-routes it back to the
-     manually adjusted stamped prototype, eliminating material proliferation and overwriting.
-   - Usage:
-     - Place objects in the `Materials` collection and assign prototype materials
-       (e.g. DW_Glass, D_Frame; LAYER_SUFFIX_LT mapped to MAT_PRESET_LT_K).
-     - Click [Assign Basic Mat.] to instantly replace all matching materials scene-wide.
-
-[Notes]
-- The sync directory is auto-populated by RHINO_OT_ResetPath using the DataPath from R2B_Path.txt.
-- Light sync relies on the template object names inside COL_FIXTURES and COL_LIGHTING.
-- Camera sync runs as a background Timer; stop it with [Stop Camera Sync] before closing the addon or Blender.
 
 """
 
 bl_info = {
     "name": "Import Rhinoceros 3D (R2B Pro)",
     "author": "Nathan 'jesterKing' Letwory, Joel Putnam, Tom Svilans, Lukas Fertig, Bernd Moeller, Workflow Partner",
-    "version": (0, 0, 50),
+    "version": (0, 0, 52),
     "blender": (5, 1, 0),
     "location": "N-Panel > LoopFlow 3dm",
-    "description": "R2B Dual-JSON performance build (V50 centralised constants + LoopFlow 3dm Panel)",
+    "description": "R2B Dual-JSON performance build with Auto Sync & Purge into top-level LoopFlow Collection",
     "category": "Import-Export",
 }
 
@@ -71,39 +26,103 @@ import os
 import re
 import json
 import mathutils
+from pathlib import Path
 from .read3dm import read_3dm
 from bpy_extras.io_utils import ImportHelper
 
+# Central Data Directory
+DATA_DIR = os.path.expanduser("~/Library/Application Support/McNeel/Rhinoceros/8.0/scripts/LoopFlow_R2B/Data")
+if not os.path.exists(DATA_DIR):
+    DATA_DIR = os.path.expanduser("~/Desktop")
+
+DEFAULT_R2B_MODEL = os.path.join(DATA_DIR, "R2B.obj")
+SYNC_JSON_FILE    = os.path.join(DATA_DIR, "R2B_Sync.json")
+
 # -------------------------------------------------------------------
-# Module-level constants (centralised for easy tuning)
+# Module-level constants
 # -------------------------------------------------------------------
 
-# Sync file names
 CAMERA_SYNC_FILE   = "R2B_Camera_Sync.json"
 LIGHT_SYNC_FILE    = "R2B_Light_Sync.json"
 
-# Collection names
 COL_FIXTURES       = "Lighting Fixtures"
 COL_LIGHTING       = "Lighting"
 COL_LIGHT_POINTS   = "R2B Lighting Points"
-COL_MATERIALS      = "Materials"       # Prototype library Collection for Assign Basic Mat. (currently disabled)
+COL_MATERIALS      = "Materials"
 
-# Material constants
 MAT_PRESET_LT_K    = "Preset_Lighting_K"
 LAYER_SUFFIX_LT    = "5_LT"
 MAT_AUTO_5LT       = "Auto_5LT_Light"
 
-# Technical parameters
-CAMERA_POLL_INTERVAL = 0.03     # Camera poll interval (seconds)
-DEFAULT_LENS         = 50.0     # Default focal length (mm)
-EMPTY_DISPLAY_SIZE   = 0.3      # Display size for light-point Empties
+CAMERA_POLL_INTERVAL = 0.03
+DEFAULT_LENS         = 50.0
+EMPTY_DISPLAY_SIZE   = 0.3
+
+# -------------------------------------------------------------------
+# View Layer Collection Un-Exclude State Sync Engine
+# -------------------------------------------------------------------
+_last_layer_col_excludes = {}
+_is_syncing_layers = False
+
+def _on_depsgraph_update_layer_collections(scene, depsgraph):
+    global _is_syncing_layers
+    if _is_syncing_layers:
+        return
+    
+    vl = bpy.context.view_layer
+    if not vl:
+        return
+
+    _is_syncing_layers = True
+    try:
+        def _sync_tree(lc, parent_was_excluded=False, parent_just_unexcluded=False):
+            col = lc.collection
+            col_name = col.name
+            
+            own_vis = col.get("rhino_own_visible", True)
+            prev_ex = _last_layer_col_excludes.get(col_name, lc.exclude)
+            curr_ex = lc.exclude
+
+            child_parent_unexcluded = False
+            curr_is_excluded = curr_ex
+
+            if parent_just_unexcluded:
+                if not own_vis:
+                    lc.exclude = True
+                    curr_is_excluded = True
+                else:
+                    lc.exclude = False
+                    curr_is_excluded = False
+                child_parent_unexcluded = True
+
+            elif prev_ex and not curr_ex:
+                col["rhino_own_visible"] = True
+                child_parent_unexcluded = True
+                curr_is_excluded = False
+
+            elif not prev_ex and curr_ex:
+                if not parent_was_excluded:
+                    col["rhino_own_visible"] = False
+                child_parent_unexcluded = False
+                curr_is_excluded = True
+
+            _last_layer_col_excludes[col_name] = curr_is_excluded
+
+            for child in lc.children:
+                _sync_tree(child, parent_was_excluded=(parent_was_excluded or curr_is_excluded), parent_just_unexcluded=child_parent_unexcluded)
+
+        _sync_tree(vl.layer_collection)
+    except Exception:
+        pass
+    finally:
+        _is_syncing_layers = False
 
 # -------------------------------------------------------------------
 # 1. Core helper functions
 # -------------------------------------------------------------------
 def merge_duplicate_materials():
     count = 0
-    for mat in bpy.data.materials:
+    for mat in list(bpy.data.materials):
         match = re.match(r"(.*)\.\d{3}$", mat.name)
         if match:
             base_name = match.group(1)
@@ -134,7 +153,7 @@ def get_all_objects_in_collection(collection):
     return objs
 
 # -------------------------------------------------------------------
-# 2. Viewport sync engine (camera only - ultra-lightweight)
+# 2. Viewport sync engine (camera only)
 # -------------------------------------------------------------------
 def update_viewport_from_json():
     wm = bpy.context.window_manager
@@ -178,301 +197,85 @@ def update_viewport_from_json():
         y_axis = z_axis.cross(x_axis).normalized()
 
         mat = mathutils.Matrix((x_axis, y_axis, z_axis)).transposed()
-        rot_quat = mat.to_quaternion()
 
-        for area in bpy.context.screen.areas:
-            if area.type == 'VIEW_3D':
-                space = area.spaces.active
-                rv3d = space.region_3d
-                if rv3d.view_perspective != 'PERSP':
-                    rv3d.view_perspective = 'PERSP'
-                space.lens = final_lens
-                rv3d.view_rotation = rot_quat
-                rv3d.view_location = loc + dir_vec * rv3d.view_distance
-                area.tag_redraw()
-
+        for window in wm.windows:
+            for area in window.screen.areas:
+                if area.type == 'VIEW_3D':
+                    for space in area.spaces:
+                        if space.type == 'VIEW_3D':
+                            region_3d = space.region_3d
+                            if region_3d.view_perspective == 'PERSP':
+                                region_3d.view_location = loc
+                                region_3d.view_rotation = mat.to_quaternion()
+                                space.lens = final_lens
     except Exception:
         pass
 
     return CAMERA_POLL_INTERVAL
 
 # -------------------------------------------------------------------
-# 3. Light sync engine (triggered by manual button)
+# Operators & Panel
 # -------------------------------------------------------------------
+
 class RHINO_OT_SyncLights(bpy.types.Operator):
     bl_idname = "import_3dm.sync_lights"
-    bl_label = "Sync Rhino Lights"
-    bl_description = "Read R2B_Light_Sync.json and manually align/generate fixtures and clean up orphans"
+    bl_label = "Sync Lights from Rhino"
+    bl_description = "Sync point positions from Rhino to instantiate fixtures or 5LT lights"
 
     def execute(self, context):
         scene = context.scene
         json_dir = bpy.path.abspath(scene.rhino_json_dir)
         json_path = os.path.join(json_dir, LIGHT_SYNC_FILE)
-        scale_factor = scene.rhino_cam_scale
 
         if not os.path.exists(json_path):
-            self.report({'WARNING'}, f"File not found: {json_path}! Please verify the directory.")
+            self.report({'ERROR'}, f"Light sync JSON not found: {json_path}")
             return {'CANCELLED'}
 
         try:
             with open(json_path, 'r') as f:
                 data = json.load(f)
 
-            if "points" not in data:
-                self.report({'INFO'}, "No light point data found in JSON.")
-                return {'FINISHED'}
-
             light_col = bpy.data.collections.get(COL_LIGHT_POINTS)
             if not light_col:
                 light_col = bpy.data.collections.new(COL_LIGHT_POINTS)
-                bpy.context.scene.collection.children.link(light_col)
+                context.scene.collection.children.link(light_col)
 
             active_guids = set()
 
-            for pt_data in data["points"]:
-                guid = pt_data["guid"]
+            for pt in data.get("points", []):
+                guid = pt["guid"]
                 active_guids.add(guid)
-                pt_type = pt_data["type"]
-                pt_loc = mathutils.Vector((
-                    pt_data["loc"][0] * scale_factor,
-                    pt_data["loc"][1] * scale_factor,
-                    pt_data["loc"][2] * scale_factor
+
+                name = pt.get("name", "LightPoint")
+                layer = pt.get("layer", "")
+
+                pos = mathutils.Vector((
+                    pt["location"]["x"] * scene.rhino_cam_scale,
+                    pt["location"]["y"] * scene.rhino_cam_scale,
+                    pt["location"]["z"] * scene.rhino_cam_scale
                 ))
 
-                target_empty = None
+                empty = None
                 for obj in light_col.objects:
-                    try:
-                        if obj.get("rhino_guid") == guid:
-                            target_empty = obj
-                            break
-                    except ReferenceError:
-                        pass
+                    if obj.get("rhino_guid") == guid:
+                        empty = obj
+                        break
 
-                if target_empty:
-                    target_empty.location = pt_loc
-                else:
-                    new_empty = bpy.data.objects.new(f"RH_{pt_type}_{guid[:5]}", None)
-                    new_empty.empty_display_type = 'PLAIN_AXES'
-                    new_empty.empty_display_size = EMPTY_DISPLAY_SIZE
-                    new_empty["rhino_guid"] = guid
-                    new_empty["rhino_type"] = pt_type
-                    light_col.objects.link(new_empty)
-                    new_empty.location = pt_loc
-                    target_empty = new_empty
+                if not empty:
+                    empty = bpy.data.objects.new(f"Empty_{name}", None)
+                    empty.empty_display_type = 'PLAIN_AXES'
+                    empty.empty_display_size = EMPTY_DISPLAY_SIZE
+                    empty["rhino_guid"] = guid
+                    light_col.objects.link(empty)
 
-                    for potential_child in bpy.data.objects:
-                        try:
-                            if potential_child.get("recovered_rhino_guid") == guid:
-                                world_mat = potential_child.matrix_world.copy()
-                                potential_child.parent = target_empty
-                                potential_child.matrix_parent_inverse = mathutils.Matrix.Identity(4)
-                                parent_future_world = mathutils.Matrix.Translation(pt_loc)
-                                potential_child.matrix_local = parent_future_world.inverted() @ world_mat
-                                del potential_child["recovered_rhino_guid"]
-                        except ReferenceError:
-                            pass
+                empty.location = pos
+                empty.name = f"Empty_{name}_{guid[:5]}"
 
-                templates = get_template_objects(pt_type)
-                processed_insts = []
-
-                for template in templates:
-                    safe_name = re.sub(r'\.\d{3}$', '', template.name)
-                    prefix = f"INST_{safe_name}_{guid[:5]}"
-
-                    existing_inst = None
-                    for c in target_empty.children:
-                        try:
-                            if c.name.startswith(prefix) and c not in processed_insts:
-                                existing_inst = c
-                                break
-                        except ReferenceError:
-                            pass
-
-                    if existing_inst:
-                        existing_inst.location = template.location
-                        existing_inst.rotation_euler = template.rotation_euler
-                        existing_inst.scale = template.scale
-                        processed_insts.append(existing_inst)
-                    else:
-                        new_inst = template.copy()
-                        if template.data:
-                            new_inst.data = template.data
-                        new_inst.name = prefix
-                        light_col.objects.link(new_inst)
-
-                        new_inst.parent = target_empty
-                        new_inst.matrix_parent_inverse = mathutils.Matrix.Identity(4)
-                        new_inst.location = template.location
-                        new_inst.rotation_euler = template.rotation_euler
-                        new_inst.scale = template.scale
-                        processed_insts.append(new_inst)
-
-                for c in list(target_empty.children):
-                    try:
-                        if c.name.startswith("INST_") and c not in processed_insts:
-                            bpy.data.objects.remove(c, do_unlink=True)
-                    except ReferenceError:
-                        pass
-
-            # [V49 fix] Cascade-delete orphaned empties when Rhino points are removed
-            empties_to_remove = []
-            for obj in light_col.objects:
-                try:
-                    if "rhino_guid" in obj and obj["rhino_guid"] not in active_guids:
-                        empties_to_remove.append(obj)
-                except ReferenceError:
-                    pass
-
-            for empty in empties_to_remove:
-                try:
-                    removed_guid = empty["rhino_guid"]
-                    for child in list(empty.children):
-                        try:
-                            if child.name.startswith("INST_"):
-                                bpy.data.objects.remove(child, do_unlink=True)
-                            else:
-                                child["recovered_rhino_guid"] = removed_guid
-                                world_mat = child.matrix_world.copy()
-                                child.parent = None
-                                child.matrix_world = world_mat
-                        except ReferenceError:
-                            pass
-                    bpy.data.objects.remove(empty, do_unlink=True)
-                except ReferenceError:
-                    pass
-
-            self.report({'INFO'}, f"Light sync complete! Processed {len(data['points'])} point(s).")
+            self.report({'INFO'}, f"Light sync complete! Processed {len(data.get('points', []))} point(s).")
         except Exception as e:
-            self.report({'ERROR'}, f"Sync failed: {e}")
+            self.report({'ERROR'}, f"Light sync failed: {e}")
 
         return {'FINISHED'}
-
-# -------------------------------------------------------------------
-# 4. Additional operators
-# -------------------------------------------------------------------
-
-# ===========================================================================
-# [DISABLED] RHINO_OT_AssignBasicMat — Assign Basic Mat. full-scene auto-assign
-# Remove all leading '#' below to re-enable; also uncomment corresponding entries
-# in the classes tuple and Panel draw method.
-# ===========================================================================
-# class RHINO_OT_AssignBasicMat(bpy.types.Operator):
-#     bl_idname = "import_3dm.assign_basic_mat"
-#     bl_label = "Assign Basic Mat."
-#     bl_description = "Auto-scan the Materials library collection and replace scene materials by keyword"
-#
-#     def execute(self, context):
-#         mat_col = bpy.data.collections.get(COL_MATERIALS)
-#         if not mat_col:
-#             self.report({'WARNING'}, "'Materials' Collection not found. Please create it and add source objects!")
-#             return {'CANCELLED'}
-#
-#         assigned_phase1 = 0
-#         assigned_phase2 = 0
-#
-#         # Phase 1: specialised rule LAYER_SUFFIX_LT (prototype-lookup safe version)
-#         preset_k_mat = None
-#         for obj in mat_col.objects:
-#             if MAT_PRESET_LT_K in obj.name and obj.material_slots and obj.material_slots[0].material:
-#                 preset_k_mat = obj.material_slots[0].material
-#                 break
-#             for slot in obj.material_slots:
-#                 if slot.material and MAT_PRESET_LT_K in slot.material.name:
-#                     preset_k_mat = slot.material
-#                     break
-#             if preset_k_mat:
-#                 break
-#
-#         if not preset_k_mat:
-#             self.report({'WARNING'}, f"No material containing '{MAT_PRESET_LT_K}' found in {COL_MATERIALS}. Skipping {LAYER_SUFFIX_LT} binding!")
-#         else:
-#             target_objs = set()
-#             for col in bpy.data.collections:
-#                 col_base = col.name.split('.')[0].strip()
-#                 if col_base.endswith(LAYER_SUFFIX_LT):
-#                     target_objs.update(get_all_objects_in_collection(col))
-#
-#             shared_empty_mat = bpy.data.materials.get(MAT_AUTO_5LT)
-#             if not shared_empty_mat or not shared_empty_mat.get("r2b_auto_assigned"):
-#                 shared_empty_mat = preset_k_mat.copy()
-#                 shared_empty_mat.name = MAT_AUTO_5LT
-#                 shared_empty_mat["r2b_auto_assigned"] = True
-#
-#             for obj in target_objs:
-#                 if obj.type in {'MESH', 'CURVE', 'SURFACE'}:
-#                     if len(obj.material_slots) == 0:
-#                         obj.data.materials.append(shared_empty_mat)
-#                         assigned_phase1 += 1
-#                     else:
-#                         for slot in obj.material_slots:
-#                             mat = slot.material
-#                             if not mat:
-#                                 slot.material = shared_empty_mat
-#                                 assigned_phase1 += 1
-#                             elif not mat.get("r2b_auto_assigned"):
-#                                 base_name = mat.name.split('.')[0].strip()
-#                                 existing_tagged = bpy.data.materials.get(base_name)
-#
-#                                 if existing_tagged and existing_tagged.get("r2b_auto_assigned") and existing_tagged != mat:
-#                                     mat.user_remap(existing_tagged)
-#                                     bpy.data.materials.remove(mat)
-#                                     assigned_phase1 += 1
-#                                 else:
-#                                     new_mat = preset_k_mat.copy()
-#                                     mat.user_remap(new_mat)
-#                                     bpy.data.materials.remove(mat)
-#                                     new_mat.name = base_name
-#                                     new_mat["r2b_auto_assigned"] = True
-#                                     assigned_phase1 += 1
-#
-#         # Phase 2: general rule (prototype-lookup safe version)
-#         source_mats = {}
-#         for obj in mat_col.objects:
-#             for slot in obj.material_slots:
-#                 if slot.material:
-#                     mat = slot.material
-#                     clean_name = mat.name.split('.')[0].strip()
-#                     if MAT_PRESET_LT_K in clean_name:
-#                         continue
-#                     keyword = re.sub(r'^(DW_|D_|W_)', '', clean_name, flags=re.IGNORECASE).strip()
-#                     if keyword:
-#                         source_mats[keyword.lower()] = mat
-#
-#         if source_mats:
-#             sorted_keywords = sorted(source_mats.keys(), key=len, reverse=True)
-#             for mat in list(bpy.data.materials):
-#                 if mat.get("r2b_auto_assigned"):
-#                     continue
-#
-#                 mat_name_lower = mat.name.lower()
-#                 best_keyword = None
-#
-#                 for kw in sorted_keywords:
-#                     if kw in mat_name_lower:
-#                         if mat != source_mats[kw]:
-#                             best_keyword = kw
-#                             break
-#
-#                 if best_keyword:
-#                     base_name = mat.name.split('.')[0].strip()
-#                     existing_tagged = bpy.data.materials.get(base_name)
-#
-#                     if existing_tagged and existing_tagged.get("r2b_auto_assigned") and existing_tagged != mat:
-#                         mat.user_remap(existing_tagged)
-#                         bpy.data.materials.remove(mat)
-#                         assigned_phase2 += 1
-#                     else:
-#                         source_mat = source_mats[best_keyword]
-#                         new_mat = source_mat.copy()
-#                         mat.user_remap(new_mat)
-#                         bpy.data.materials.remove(mat)
-#                         new_mat.name = base_name
-#                         new_mat["r2b_auto_assigned"] = True
-#                         assigned_phase2 += 1
-#
-#         self.report({'INFO'}, f"Done! {LAYER_SUFFIX_LT} forced {assigned_phase1} replacement(s); basic materials replaced {assigned_phase2}.")
-#         return {'FINISHED'}
-# ===========================================================================
 
 class RHINO_OT_ResetProp(bpy.types.Operator):
     bl_idname = "import_3dm.reset_prop"
@@ -518,14 +321,13 @@ class RHINO_OT_ShowHelp(bpy.types.Operator):
         layout = self.layout
         box = layout.box()
         box.label(text="[Model Sync]", icon='MESH_DATA')
-        box.label(text="1. Rhino: run LiveLink_R2B_Models.py (select a layer to produce R2B.3dm)")
-        box.label(text="2. Blender: click 'Import Models' or 'Update Models'")
+        box.label(text="1. Rhino: Click Fast Link (⚡️ icon) or Advanced Link (⚙️ icon)")
+        box.label(text="2. Blender: Click 'Update Models' in LoopFlow sidebar panel")
         layout.separator()
         box2 = layout.box()
         box2.label(text="[Auto Material & Lights]", icon='LIGHT')
-        box2.label(text="1. Place prototype objects in Materials to use Assign Basic Mat")
-        box2.label(text=f"2. Create {COL_FIXTURES} / {COL_LIGHTING} to link Rhino point positions")
-        box2.label(text="3. Set Sync Folder (click Auto-Detect to fill automatically), then update lights and camera in one click")
+        box2.label(text="1. Place prototype objects in Materials collection")
+        box2.label(text="2. Toggle Camera Sync for real-time viewport alignment")
 
     def execute(self, context):
         return {'FINISHED'}
@@ -536,25 +338,25 @@ class RHINO_OT_ShowHelp(bpy.types.Operator):
 class RHINO_OT_ResetPath(bpy.types.Operator):
     bl_idname = "import_3dm.reset_path"
     bl_label = "Auto-Detect Paths"
-    bl_description = "Auto-set the model path to //R2B.3dm and the JSON sync directory to DataPath from R2B_Path.txt"
+    bl_description = "Auto-detect model path and sync directory"
 
     def execute(self, context):
-        blend_path = bpy.data.filepath
-        if not blend_path:
-            self.report({'ERROR'}, "Please save the Blender file first to obtain its directory")
-            return {'CANCELLED'}
+        candidates = [
+            os.path.join(DATA_DIR, "R2B.obj"),
+            os.path.join(DATA_DIR, "R2B.3dm"),
+            DEFAULT_R2B_MODEL,
+        ]
+        
+        found_model = candidates[0]
+        for cand in candidates:
+            if cand and os.path.exists(cand):
+                found_model = cand
+                break
+                
+        context.scene.rhino_update_path = found_model
+        context.scene.rhino_json_dir = DATA_DIR
 
-        # Model path: R2B.3dm relative to the Blender file
-        context.scene.rhino_update_path = "//R2B.3dm"
-
-        # Sync Folder: points to DataPath from R2B_Path.txt (absolute AppData path)
-        data_dir = os.path.join(
-            os.getenv("APPDATA", ""),
-            "McNeel", "Rhinoceros", "8.0", "scripts", "LoopFlow_R2B", "Data"
-        )
-        context.scene.rhino_json_dir = data_dir
-
-        self.report({'INFO'}, "Paths auto-configured (Model: //R2B.3dm, JSON: {})".format(data_dir))
+        self.report({'INFO'}, f"Paths auto-configured: {found_model}")
         return {'FINISHED'}
 
 class RHINO_OT_QuickSync(bpy.types.Operator):
@@ -564,19 +366,65 @@ class RHINO_OT_QuickSync(bpy.types.Operator):
     @classmethod
     def description(cls, context, properties):
         if getattr(properties, 'update_mats', False):
-            return "Import model and update materials (recommended for first import; overwrites unprotected materials)"
-        return "Update geometry only, perfectly preserving materials and layer states already configured in Blender"
+            return "Import model and update materials"
+        return "Update geometry only, preserving materials and layer states"
 
     update_mats: bpy.props.BoolProperty(default=False)
 
     def execute(self, context):
-        path = bpy.path.abspath(context.scene.rhino_update_path)
-        if not os.path.exists(path):
-            self.report({'ERROR'}, f"File not found: {path}")
+        sync_meta = {}
+        if os.path.exists(SYNC_JSON_FILE):
+            try:
+                with open(SYNC_JSON_FILE, 'r', encoding='utf-8') as f:
+                    sync_meta = json.load(f)
+            except Exception:
+                pass
+
+        active_filepath = sync_meta.get("active_filepath", "")
+        fallback_filepath = sync_meta.get("fallback_filepath", "")
+        export_format = sync_meta.get("export_format", "OBJ")
+
+        raw_path = context.scene.rhino_update_path
+        path = bpy.path.abspath(raw_path)
+
+        target_path = ""
+        if active_filepath and os.path.exists(active_filepath):
+            target_path = active_filepath
+        elif fallback_filepath and os.path.exists(fallback_filepath):
+            target_path = fallback_filepath
+        elif path and os.path.exists(path) and not path.endswith("subd_test.obj"):
+            target_path = path
+
+        if not target_path or not os.path.exists(target_path):
+            candidates = [
+                os.path.join(DATA_DIR, "R2B.obj"),
+                os.path.join(DATA_DIR, "R2B.3dm"),
+                DEFAULT_R2B_MODEL,
+            ]
+            for cand in candidates:
+                if cand and os.path.exists(cand):
+                    target_path = cand
+                    break
+
+        if not target_path or not os.path.exists(target_path):
+            self.report({'ERROR'}, f"No active sync file found in {DATA_DIR}. Please run Fast Link or Advanced Link in Rhino first!")
             return {'CANCELLED'}
 
-        col_states = {}
+        context.scene.rhino_update_path = target_path
 
+        # 1. Ensure master top-level 'LoopFlow' collection exists in Scene Collection
+        master_col_name = "LoopFlow"
+        master_col = bpy.data.collections.get(master_col_name)
+        if not master_col:
+            master_col = bpy.data.collections.new(name=master_col_name)
+        if master_col.name not in context.scene.collection.children:
+            try:
+                context.scene.collection.children.link(master_col)
+            except Exception:
+                pass
+
+        # Always route through 3DM Delta Sync engine (read_3dm)
+        col_states = {}
         def capture_col_states(lc):
             col_states[lc.collection.name] = {
                 'exclude': lc.exclude,
@@ -587,65 +435,49 @@ class RHINO_OT_QuickSync(bpy.types.Operator):
             for child in lc.children:
                 capture_col_states(child)
 
-        capture_col_states(context.view_layer.layer_collection)
+        if not self.update_mats:
+            capture_col_states(context.view_layer.layer_collection)
 
-        obj_states = {}
-        for obj in bpy.data.objects:
-            obj_states[obj.name] = {
-                'hide_get': obj.hide_get(),
-                'hide_viewport': obj.hide_viewport,
-                'hide_render': obj.hide_render,
-                'display_type': obj.display_type,
-                'display_bounds_type': obj.display_bounds_type
-            }
+        three_dm_path = target_path if target_path.endswith(".3dm") else os.path.splitext(target_path)[0] + ".3dm"
+        if not os.path.exists(three_dm_path):
+            three_dm_path = os.path.join(DATA_DIR, "R2B.3dm")
 
         bpy.ops.import_3dm.some_data(
-            filepath=path,
-            import_curves=True,
-            import_meshes=True,
+            filepath=three_dm_path,
+            import_curves=getattr(context.scene, "rhino_import_curves", False),
+            import_meshes=getattr(context.scene, "rhino_import_meshes", True),
+            weld_meshes=getattr(context.scene, "rhino_weld_meshes", True),
             update_materials=self.update_mats
         )
 
         merged = merge_duplicate_materials()
 
-        def restore_col_states(lc):
-            if lc.collection.name in col_states:
-                state = col_states[lc.collection.name]
-                lc.exclude = state['exclude']
-                lc.hide_viewport = state['hide_viewport_eye']
-                lc.collection.hide_viewport = state['hide_viewport_screen']
-                lc.collection.hide_render = state['hide_render']
-            for child in lc.children:
-                restore_col_states(child)
+        if not self.update_mats and col_states:
+            def restore_col_states(lc):
+                if lc.collection.name in col_states:
+                    state = col_states[lc.collection.name]
+                    lc.hide_viewport = state['hide_viewport_eye']
+                    lc.collection.hide_viewport = state['hide_viewport_screen']
+                    lc.collection.hide_render = state['hide_render']
+                for child in lc.children:
+                    restore_col_states(child)
 
-        restore_col_states(context.view_layer.layer_collection)
+            restore_col_states(context.view_layer.layer_collection)
 
-        for obj in bpy.data.objects:
-            if obj.name in obj_states:
-                state = obj_states[obj.name]
-                obj.hide_set(state['hide_get'])
-                obj.hide_viewport = state['hide_viewport']
-                obj.hide_render = state['hide_render']
-                obj.display_type = state.get('display_type', 'TEXTURED')
-                obj.display_bounds_type = state.get('display_bounds_type', 'BOX')
-
-        if merged > 0:
-            self.report({'INFO'}, f"Model updated (states preserved, merged {merged} material(s))")
-        else:
-            self.report({'INFO'}, "Model updated (states preserved)")
-
+        self.report({'INFO'}, f"Model updated cleanly ({os.path.basename(three_dm_path)}).")
         return {'FINISHED'}
 
 # -------------------------------------------------------------------
-# 5. Panel and import operator
+# Panel Layout
 # -------------------------------------------------------------------
 class Import3dm(bpy.types.Operator, ImportHelper):
     bl_idname = "import_3dm.some_data"
     bl_label = "Import Rhinoceros 3D"
     filename_ext = ".3dm"
     filter_glob: bpy.props.StringProperty(default="*.3dm", options={'HIDDEN'})
-    import_curves: bpy.props.BoolProperty(name="Curves", default=True)
+    import_curves: bpy.props.BoolProperty(name="Curves", default=False)
     import_meshes: bpy.props.BoolProperty(name="Meshes", default=True)
+    weld_meshes: bpy.props.BoolProperty(name="Weld Meshes", default=True)
     update_materials: bpy.props.BoolProperty(name="Update Materials", default=False)
 
     def execute(self, context):
@@ -675,6 +507,10 @@ class RHINO_PT_QuickUpdate(bpy.types.Panel):
         col_upd.scale_y = 1.3
         col_upd.operator("import_3dm.quick_sync", text="Update Models", icon='FILE_REFRESH').update_mats = False
 
+        row_opts = box_model.row(align=True)
+        row_opts.prop(scene, "rhino_weld_meshes", text="Weld Meshes")
+        row_opts.prop(scene, "rhino_import_curves", text="Import Curves")
+
         row_model_path = box_model.row(align=True)
         row_model_path.prop(scene, "rhino_update_path", text="")
         row_model_path.operator("import_3dm.reset_path", text="", icon='VIEWZOOM')
@@ -685,48 +521,28 @@ class RHINO_PT_QuickUpdate(bpy.types.Panel):
         box_cam = layout.box()
 
         is_active = wm.get("livelink_viewport_active", 0) == 1
-
-        row_cam = box_cam.row()
-        row_cam.scale_y = 1.3
+        col_sync = box_cam.column()
+        col_sync.scale_y = 1.2
         if is_active:
-            row_cam.operator("import_3dm.toggle_cam_sync", text="Stop Camera Sync", icon='PAUSE')
+            col_sync.operator("import_3dm.toggle_cam_sync", text="Stop Camera Sync", icon='CANCEL')
         else:
-            row_cam.operator("import_3dm.toggle_cam_sync", text="Start Camera Sync", icon='PLAY')
+            col_sync.operator("import_3dm.toggle_cam_sync", text="Start Camera Sync", icon='PLAY')
 
-        row_scale = box_cam.row(align=True)
-        row_scale.prop(scene, "rhino_cam_scale", text="Scale")
-        row_scale.operator("import_3dm.reset_prop", text="", icon='FILE_REFRESH').target = "scale"
+        col_light = box_cam.column()
+        col_light.scale_y = 1.1
+        col_light.operator("import_3dm.sync_lights", text="Sync Light Points", icon='LIGHT_POINT')
 
-        row_lens = box_cam.row(align=True)
-        row_lens.prop(scene, "rhino_cam_lens_mult", text="Lens")
-        row_lens.operator("import_3dm.reset_prop", text="", icon='FILE_REFRESH').target = "lens"
+        box_cam.operator("import_3dm.show_help", text="Help / Workflow Guide", icon='QUESTION')
 
-        box_cam.separator()
-
-        row_light = box_cam.row()
-        row_light.scale_y = 1.3
-        row_light.operator("import_3dm.sync_lights", text="Sync Rhino Lights", icon='LIGHT')
-
-        box_cam.prop(scene, "rhino_json_dir", text="Sync Folder")
-
-        layout.separator()
-
-        # layout.operator("import_3dm.assign_basic_mat", text="Assign Basic Mat.", icon='MATERIAL')  # [DISABLED]
-        layout.operator("import_3dm.show_help", text="Help & Guide", icon='HELP')
-
-# -------------------------------------------------------------------
-# 6. Registration
-# -------------------------------------------------------------------
 classes = (
-    Import3dm,
     RHINO_OT_SyncLights,
-    # RHINO_OT_AssignBasicMat,  # [DISABLED]
     RHINO_OT_ResetProp,
-    RHINO_OT_ResetPath,
-    RHINO_OT_QuickSync,
     RHINO_OT_ToggleCamSync,
     RHINO_OT_ShowHelp,
-    RHINO_PT_QuickUpdate
+    RHINO_OT_ResetPath,
+    RHINO_OT_QuickSync,
+    Import3dm,
+    RHINO_PT_QuickUpdate,
 )
 
 def register():
@@ -734,27 +550,63 @@ def register():
         bpy.utils.register_class(cls)
 
     bpy.types.Scene.rhino_update_path = bpy.props.StringProperty(
-        name="Path", default="//R2B.3dm", subtype='FILE_PATH'
+        name="Model File",
+        description="Path to sync model file",
+        default=os.path.join(DATA_DIR, "R2B.obj"),
+        subtype='FILE_PATH'
     )
     bpy.types.Scene.rhino_json_dir = bpy.props.StringProperty(
-        name="Sync Folder", default="//", subtype='DIR_PATH'
+        name="JSON Directory",
+        description="Directory containing LiveLink sync JSON files",
+        default=DATA_DIR,
+        subtype='DIR_PATH'
+    )
+    bpy.types.Scene.rhino_import_curves = bpy.props.BoolProperty(
+        name="Import Curves",
+        description="Import CAD curves",
+        default=False
+    )
+    bpy.types.Scene.rhino_import_meshes = bpy.props.BoolProperty(
+        name="Import Meshes",
+        description="Import mesh geometry",
+        default=True
+    )
+    bpy.types.Scene.rhino_weld_meshes = bpy.props.BoolProperty(
+        name="Weld Meshes",
+        description="Weld mesh vertices",
+        default=True
     )
     bpy.types.Scene.rhino_cam_scale = bpy.props.FloatProperty(
-        name="Scale Factor", description="Unit conversion ratio (0.01 for centimetres)", default=0.01, min=0.0001, max=100.0
+        name="Scale Factor",
+        description="Scale factor from Rhino units to Blender meters",
+        default=0.01
     )
     bpy.types.Scene.rhino_cam_lens_mult = bpy.props.FloatProperty(
-        name="Lens Multiplier", description="Increase this value if the view appears too wide", default=1.80, min=0.1, max=5.0
+        name="Lens Multiplier",
+        description="Focal length multiplier",
+        default=1.80
     )
 
+    try:
+        bpy.app.handlers.depsgraph_update_post.append(_on_depsgraph_update_layer_collections)
+    except Exception:
+        pass
+
 def unregister():
-    if bpy.context.window_manager.get("livelink_viewport_active", 0) == 1:
-        bpy.context.window_manager["livelink_viewport_active"] = 0
+    try:
+        if _on_depsgraph_update_layer_collections in bpy.app.handlers.depsgraph_update_post:
+            bpy.app.handlers.depsgraph_update_post.remove(_on_depsgraph_update_layer_collections)
+    except Exception:
+        pass
 
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
 
     del bpy.types.Scene.rhino_update_path
     del bpy.types.Scene.rhino_json_dir
+    del bpy.types.Scene.rhino_import_curves
+    del bpy.types.Scene.rhino_import_meshes
+    del bpy.types.Scene.rhino_weld_meshes
     del bpy.types.Scene.rhino_cam_scale
     del bpy.types.Scene.rhino_cam_lens_mult
 

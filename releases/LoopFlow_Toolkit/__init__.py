@@ -98,7 +98,7 @@ bl_info = {
     "name": "LoopFlow Toolkit",
     "author": "Python Partner",
     "version": (1, 0, 0),
-    "blender": (5, 1, 0),
+    "blender": (5, 2, 0),
     "location": "View3D > N Panel > LoopFlow Toolkit",
     "description": "Integrated toolkit: Export, Rename, and Selection tools",
     "category": "Object",
