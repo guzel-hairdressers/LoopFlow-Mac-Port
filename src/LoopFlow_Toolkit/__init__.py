@@ -96,7 +96,7 @@ Included tools:
 
 bl_info = {
     "name": "LoopFlow Toolkit",
-    "author": "Ruslan Fazulzyanov (guzel-hairdressers) & Chihyu Tsai",
+    "author": "Ruslan F & Chihyu Tsai",
     "version": (1, 0, 0),
     "blender": (5, 2, 0),
     "location": "View3D > N Panel > LoopFlow Toolkit",

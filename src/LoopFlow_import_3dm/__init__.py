@@ -13,7 +13,7 @@ Location           : 3D Viewport sidebar (N-Panel > LoopFlow 3dm > Rhino Live Li
 
 bl_info = {
     "name": "Import Rhinoceros 3D (R2B Pro)",
-    "author": "Ruslan Fazulzyanov (guzel-hairdressers), Chihyu Tsai, Nathan 'jesterKing' Letwory, Joel Putnam, Tom Svilans",
+    "author": "Ruslan F, Chihyu Tsai, Nathan 'jesterKing' Letwory, Joel Putnam, Tom Svilans",
     "version": (0, 0, 52),
     "blender": (5, 1, 0),
     "location": "N-Panel > LoopFlow 3dm",

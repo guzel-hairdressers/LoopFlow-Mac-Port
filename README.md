@@ -6,13 +6,13 @@
 
 [▶ How it works (YouTube)](https://www.youtube.com/playlist?list=PLiJmu8T_uzJJTnDl6HLSOFZ3DimkI9bV8) · [▶ User Guide](./docs/USER_GUIDE.md) · [▶ Download Releases](./releases)
 
-LoopFlow is a ultra-high-performance **Rhino 8 to Blender LiveSync Engine** built for macOS (Apple Silicon & Intel) and Windows. It provides zero-overhead geometry synchronization, instant layer visibility updates ($< 0.06\text{s}$), camera viewport mirroring, and light alignment.
+LoopFlow is an ultra-high-performance **Rhino 8 to Blender LiveSync Engine** built for macOS (Apple Silicon & Intel) and Windows. It provides zero-overhead geometry synchronization, instant layer visibility updates ($< 0.06\text{s}$), camera viewport mirroring, and light alignment.
 
 ---
 
 ## 👨‍💻 Authors & Credits
 
-- **Ruslan Fazulzyanov** ([@guzel-hairdressers](https://github.com/guzel-hairdressers)) — macOS Port Lead & High-Performance Dual-JSON Sync Engine Architect
+- **Ruslan F** ([@guzel-hairdressers](https://github.com/guzel-hairdressers)) — macOS Port Lead & High-Performance Dual-JSON Sync Engine Architect
 - **Chihyu Tsai** ([@ChihyuTsai-Oli](https://github.com/ChihyuTsai-Oli)) — Original LoopFlow Creator & Concept Lead
 - **Nathan Letwory** ([@jesterKing](https://github.com/jesterKing)) — Original `import_3dm` Importer Foundation (MIT License)
 
@@ -30,21 +30,22 @@ LoopFlow is a ultra-high-performance **Rhino 8 to Blender LiveSync Engine** buil
 ## 📁 Repository Structure
 
 ```text
-LoopFlow_Rhino-to-Blender-Sync/
-├── src/                          # Core Extension Source Code
+LoopFlow-Mac-Port/
+├── src/                          # 📦 Core Extension Source Code
 │   ├── LoopFlow_import_3dm/      # Blender 3DM Importer & LiveSync Engine
 │   ├── LoopFlow_Toolkit/         # Blender Auxiliary Utility Toolkit
-│   └── Rhino/                    # Rhino 8 RHC Toolbars & Python Engines
-├── releases/                     # Compiled Addon ZIP Packages & Installers
+│   └── Rhino/                    # Rhino 8 Toolbars (.rhc) & Python Engines
+├── releases/                     # 🚀 Pre-packaged Release ZIPs & Installers
 │   ├── LoopFlow_import_3dm.zip
 │   ├── LoopFlow_Toolkit.zip
 │   ├── LoopFlow_R2B_Mac.rhc
 │   ├── LoopFlow_R2B.rhc
 │   └── install_LoopFlow_R2B.command
-├── docs/                         # Guides, Documentation & Diagrams
-├── icons/                        # Pure Vector Artboard SVG Icons
-├── scripts/                      # Developer Build & Packaging Utilities
-│   └── package_release.py
+├── docs/                         # 📖 Guides, Manuals & Diagrams
+├── icons/                        # 🎨 Pure Vector SVG Artboard Icons
+├── scripts/                      # 🛠 Developer Build & Packaging Utilities
+│   └── package_release.py        # Automated ZIP packaging script
+├── .gitignore                    # Clean Git ignore rules
 ├── LICENSE                       # MIT License
 ├── README.md                     # Documentation (English)
 ├── CHANGELOG.md                  # Release Version History
@@ -66,26 +67,6 @@ LoopFlow_Rhino-to-Blender-Sync/
 
 ---
 
-## 🔗 Connecting to your GitHub Repository
-
-To connect this local project repository to your GitHub account (`https://github.com/guzel-hairdressers`):
-
-1. **Create the repository on GitHub**:
-   Go to [https://github.com/new](https://github.com/new) and create a new repository named `LoopFlow_Rhino-to-Blender-Sync` (or `LoopFlow-Mac-Port`). Leave it empty (without initializing README/License).
-
-2. **Add Remote & Push**:
-   Run the following terminal commands inside this workspace folder:
-   ```bash
-   git remote remove origin
-   git remote add origin https://github.com/guzel-hairdressers/LoopFlow_Rhino-to-Blender-Sync.git
-   git branch -M main
-   git add .
-   git commit -m "Initial commit: Restructured GitHub project with ultra-fast sync engine"
-   git push -u origin main
-   ```
-
----
-
 ## 📜 License
 
-Distributed under the [MIT License](LICENSE). Copyright (c) 2026 Ruslan Fazulzyanov & Chihyu Tsai.
+Distributed under the [MIT License](LICENSE). Copyright (c) 2026 Ruslan F & Chihyu Tsai.
