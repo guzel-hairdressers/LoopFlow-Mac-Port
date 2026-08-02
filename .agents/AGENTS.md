@@ -19,3 +19,14 @@
 4. **Rhino Script Command Options Bar**:
    - Use `Rhino.Input.Custom.GetOption()` for Left Command Options Bar workflows.
    - Call `go.AcceptString(False)` to hide the empty string prompt field at the top of the command options panel.
+
+## Git Push Protocol Rule
+
+- **Do NOT automatically execute `git push`** after making file edits or commits.
+- Only run `git push` when the user explicitly requests to push.
+
+## Performance & Memory Profiling Log Rule
+
+- Every execution of **Update Model** automatically appends structured suboperation performance and RAM footprint logs in JSONLines (`.jsonl`) format to:
+  `~/Library/Application Support/McNeel/Rhinoceros/8.0/scripts/LoopFlow_R2B/Data/LoopFlow_Performance.log`
+- Future AI agents must inspect `LoopFlow_Performance.log` when optimizing suboperations (e.g. disk read, C++ collection teardown, mesh conversion, layer visibility assignment).

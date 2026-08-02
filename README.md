@@ -67,6 +67,15 @@ LoopFlow-Mac-Port/
 
 ---
 
+## Performance Profiling & Suboperation Logging
+
+Every execution of **Update Model** automatically appends structured suboperation performance and RAM footprint metrics (in JSONLines `.jsonl` format) to:
+`~/Library/Application Support/McNeel/Rhinoceros/8.0/scripts/LoopFlow_R2B/Data/LoopFlow_Performance.log`
+
+This log file tracks sub-millisecond execution times and resident RAM memory deltas for each suboperation (file parsing, C++ collection teardown, mesh conversion, layer visibility updates) for developer benchmarking and performance optimizations.
+
+---
+
 ## License
 
 Distributed under the [MIT License](LICENSE). Copyright (c) 2026 Ruslan F & Chihyu Tsai.
