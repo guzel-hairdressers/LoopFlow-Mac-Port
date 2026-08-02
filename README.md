@@ -12,7 +12,7 @@ LoopFlow is an ultra-high-performance **Rhino 8 to Blender LiveSync Engine** bui
 
 ## 👨‍💻 Authors & Credits
 
-- **Ruslan F** ([@guzel-hairdressers](https://github.com/guzel-hairdressers)) — macOS Port Lead & High-Performance Dual-JSON Sync Engine Architect
+- **Ruslan F** ([@guzel-hairdressers](https://github.com/guzel-hairdressers)) — MacOS Port Creator
 - **Chihyu Tsai** ([@ChihyuTsai-Oli](https://github.com/ChihyuTsai-Oli)) — Original LoopFlow Creator & Concept Lead
 - **Nathan Letwory** ([@jesterKing](https://github.com/jesterKing)) — Original `import_3dm` Importer Foundation (MIT License)
 
