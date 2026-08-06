@@ -49,44 +49,48 @@ def handle_layers(context, model, toplayer, layerids, materials, update, import_
 
     layer_visibility = {}
 
-    # Setup main container to hold all layer collections
-    layer_col_id = "Layers"
-    if not layer_col_id in context.blend_data.collections:
-        layer_col = context.blend_data.collections.new(name=layer_col_id)
+    # Setup main container to hold layer collections SPECIFIC to this imported file
+    layer_col_name = f"Layers ({toplayer.name})"
+    layer_col = toplayer.children.get(layer_col_name)
+    if not layer_col:
+        layer_col = context.blend_data.collections.new(name=layer_col_name)
         try:
             toplayer.children.link(layer_col)
         except Exception:
             pass
-    else:
-        layer_col = context.blend_data.collections[layer_col_id]
 
     # Build lookup table for LayerTable index
-    # Count layer names to detect duplicates like "Panels"
     layer_name_counts = {}
     for l in model.Layers:
         layer_name_counts[l.Name] = layer_name_counts.get(l.Name, 0) + 1
 
     for lid, l in enumerate(model.Layers):
-        # If multiple layers share the same short name (e.g. "Panels"), use FullPath to avoid collection name collisions
+        # Scope collection creation to this imported file to avoid cross-file collection collisions
         col_name = l.FullPath if (layer_name_counts.get(l.Name, 0) > 1 and hasattr(l, "FullPath") and l.FullPath) else l.Name
-        tags = utils.create_tag_dict(l.Id, col_name)
-        lcol = utils.get_or_create_iddata(context.blend_data.collections, tags, None)
-        layerids[str(l.Id)] = lcol
-        layerids[lid] = lcol
-        layerids[l.Index] = lcol
         
+        # Look for existing collection under layer_col
+        lcol = layer_col.children.get(col_name)
+        if not lcol:
+            tags = utils.create_tag_dict(l.Id, col_name)
+            lcol = context.blend_data.collections.new(name=col_name)
+            utils.tag_data(lcol, tags)
+
         lcol["rhid"] = str(l.Id)
         lcol["rhino_full_path"] = str(l.FullPath)
         lcol["rhino_layer_name"] = str(l.Name)
         lcol["rhino_own_visible"] = l.Visible
-        
+
+        layerids[str(l.Id)] = lcol
+        layerids[lid] = lcol
+        layerids[l.Index] = lcol
+
         layer_visibility[lcol.name] = {
             "effective_visible": is_effective_visible(l),
             "own_visible": l.Visible,
             "layer_index": lid
         }
 
-    # Second pass: link layers cleanly without double-linking (prevents duplicate .001 collections)
+    # Second pass: link layers cleanly into layer_col hierarchy for this file
     for l in model.Layers:
         if str(l.Id) not in layerids:
             continue
@@ -95,7 +99,6 @@ def handle_layers(context, model, toplayer, layerids, materials, update, import_
         # Link up layers to their parent layers
         if str(l.ParentLayerId) in layerids:
             parentlayer = layerids[str(l.ParentLayerId)]
-            # Unlink from top layer_col if previously linked there
             if child_col.name in layer_col.children:
                 try:
                     layer_col.children.unlink(child_col)
@@ -106,7 +109,6 @@ def handle_layers(context, model, toplayer, layerids, materials, update, import_
                     parentlayer.children.link(child_col)
                 except Exception:
                     pass
-        # Or to the top collection if no parent layer was found
         else:
             if child_col.name not in layer_col.children:
                 try:
