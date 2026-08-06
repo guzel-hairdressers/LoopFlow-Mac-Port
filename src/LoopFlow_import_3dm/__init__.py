@@ -449,16 +449,21 @@ class RHINO_OT_QuickSync(bpy.types.Operator):
 
         context.scene.rhino_update_path = target_path
 
-        # If OVERRIDE mode, clear existing LoopFlow collection objects first
-        if is_override:
-            master_col = bpy.data.collections.get("LoopFlow")
-            if master_col:
-                objs_to_delete = get_all_objects_in_collection(master_col)
+        # If OVERRIDE mode, clear ONLY the target file collection inside LoopFlow (leaving other imported files untouched)
+        if is_override and target_path:
+            file_stem = Path(target_path).stem
+            file_col = bpy.data.collections.get(file_stem)
+            if file_col:
+                objs_to_delete = get_all_objects_in_collection(file_col)
                 for obj in objs_to_delete:
                     try:
                         bpy.data.objects.remove(obj, do_unlink=True)
                     except Exception:
                         pass
+                try:
+                    bpy.data.collections.remove(file_col, do_unlink=True)
+                except Exception:
+                    pass
 
         # 1. Ensure master top-level 'LoopFlow' collection exists in Scene Collection
         master_col_name = "LoopFlow"
