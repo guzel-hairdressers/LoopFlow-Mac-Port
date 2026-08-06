@@ -212,19 +212,22 @@ def import_render_mesh(context, ob, name, scale, options):
             if not crease_v_layer and subd_vert_creases:
                 crease_v_layer = bm.verts.layers.float.new("crease_vert")
 
+            dist_sq = lambda p1, p2: (p1.x-p2[0])**2 + (p1.y-p2[1])**2 + (p1.z-p2[2])**2
+            sq_tol = 1e-4
+
             if subd_crease_segments and crease_e_layer:
                 for edge in bm.edges:
-                    p0 = (edge.verts[0].co.x, edge.verts[0].co.y, edge.verts[0].co.z)
-                    p1 = (edge.verts[1].co.x, edge.verts[1].co.y, edge.verts[1].co.z)
-                    e_min_x = min(p0[0], p1[0])
-                    e_max_x = max(p0[0], p1[0])
-                    e_min_y = min(p0[1], p1[1])
-                    e_max_y = max(p0[1], p1[1])
-                    e_min_z = min(p0[2], p1[2])
-                    e_max_z = max(p0[2], p1[2])
+                    p1 = edge.verts[0].co
+                    p2 = edge.verts[1].co
+
+                    e_min_x = min(p1.x, p2.x) - 1e-3
+                    e_max_x = max(p1.x, p2.x) + 1e-3
+                    e_min_y = min(p1.y, p2.y) - 1e-3
+                    e_max_y = max(p1.y, p2.y) + 1e-3
+                    e_min_z = min(p1.z, p2.z) - 1e-3
+                    e_max_z = max(p1.z, p2.z) + 1e-3
 
                     for (min_x, max_x, min_y, max_y, min_z, max_z, a, b, val) in subd_crease_segments:
-                        # Fast bounding box rejection check (6 float comparisons)
                         if e_max_x < min_x or e_min_x > max_x:
                             continue
                         if e_max_y < min_y or e_min_y > max_y:
@@ -232,21 +235,32 @@ def import_render_mesh(context, ob, name, scale, options):
                         if e_max_z < min_z or e_min_z > max_z:
                             continue
 
-                        # Detailed geometric check only if bounding box overlaps
-                        if _point_on_segment(p0, a, b) and _point_on_segment(p1, a, b):
+                        if (dist_sq(p1, a) < sq_tol and dist_sq(p2, b) < sq_tol) or \
+                           (dist_sq(p1, b) < sq_tol and dist_sq(p2, a) < sq_tol):
                             edge[crease_e_layer] = max(edge[crease_e_layer], val)
                             break
 
             if subd_vert_creases and crease_v_layer:
                 for vert in bm.verts:
-                    vp = (vert.co.x, vert.co.y, vert.co.z)
+                    v_co = vert.co
                     for (p, val) in subd_vert_creases.items():
-                        if _dist(vp, p) < 1e-3:
+                        if dist_sq(v_co, p) < sq_tol:
                             vert[crease_v_layer] = max(vert[crease_v_layer], val)
                             break
 
+        sharp_edge_indices = []
+        if is_subd and (subd_crease_segments and crease_e_layer):
+            for idx, edge in enumerate(bm.edges):
+                if edge[crease_e_layer] > 0:
+                    sharp_edge_indices.append(idx)
+
         bm.to_mesh(mesh)
         bm.free()
+
+        if sharp_edge_indices:
+            for idx in sharp_edge_indices:
+                if idx < len(mesh.edges):
+                    mesh.edges[idx].use_edge_sharp = True
 
         if not is_subd:
             if bpy.app.version >= (4, 1):
