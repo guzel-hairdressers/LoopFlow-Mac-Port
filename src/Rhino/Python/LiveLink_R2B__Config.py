@@ -139,10 +139,23 @@ def save_r2b_sync_metadata(meta_dict):
             json.dump(meta_dict, f, indent=2, ensure_ascii=False)
 
         act_file = meta_dict.get("active_filepath", "")
-        if act_file and os.path.exists(os.path.dirname(act_file)):
-            local_json = os.path.join(os.path.dirname(act_file), "R2B_Sync.json")
-            with open(local_json, 'w', encoding='utf-8') as f:
+        if act_file:
+            stem = os.path.splitext(os.path.basename(act_file))[0]
+            # Write R2B_Sync_<file_stem>.json to DATA_DIR
+            named_json_data = os.path.join(DATA_DIR, "R2B_Sync_{}.json".format(stem))
+            with open(named_json_data, 'w', encoding='utf-8') as f:
                 json.dump(meta_dict, f, indent=2, ensure_ascii=False)
+
+            # Write R2B_Sync.json and R2B_Sync_<file_stem>.json to model directory
+            act_dir = os.path.dirname(act_file)
+            if act_dir and os.path.exists(act_dir):
+                local_json = os.path.join(act_dir, "R2B_Sync.json")
+                with open(local_json, 'w', encoding='utf-8') as f:
+                    json.dump(meta_dict, f, indent=2, ensure_ascii=False)
+
+                local_named = os.path.join(act_dir, "R2B_Sync_{}.json".format(stem))
+                with open(local_named, 'w', encoding='utf-8') as f:
+                    json.dump(meta_dict, f, indent=2, ensure_ascii=False)
     except Exception as e:
         print("LoopFlow Config Error saving R2B_Sync.json: {}".format(e))
 

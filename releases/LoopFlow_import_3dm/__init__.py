@@ -418,7 +418,7 @@ class RHINO_OT_QuickSync(bpy.types.Operator):
         target_path = ""
 
         # Target path resolution:
-        # Priority 1: User explicitly specified/selected a .3dm file path in Blender UI
+        # Priority 1: User explicitly specified/selected a valid .3dm file path in Blender UI
         if path and os.path.exists(path) and path.endswith(".3dm"):
             target_path = path
         else:
@@ -438,6 +438,23 @@ class RHINO_OT_QuickSync(bpy.types.Operator):
                 target_path = active_filepath
             elif fallback_filepath and os.path.exists(fallback_filepath):
                 target_path = fallback_filepath
+            else:
+                # Priority 3: Find most recently modified .3dm file with an associated .json manifest in DATA_DIR
+                latest_time = -1
+                best_cand = ""
+                if os.path.exists(DATA_DIR):
+                    for fname in os.listdir(DATA_DIR):
+                        if fname.endswith(".3dm"):
+                            f_full = os.path.join(DATA_DIR, fname)
+                            f_stem = Path(fname).stem
+                            json_cand = os.path.join(DATA_DIR, "R2B_Sync_{}.json".format(f_stem))
+                            if os.path.exists(json_cand) or fname == "R2B.3dm":
+                                mtime = os.path.getmtime(f_full)
+                                if mtime > latest_time:
+                                    latest_time = mtime
+                                    best_cand = f_full
+                if best_cand:
+                    target_path = best_cand
 
         if not target_path or not os.path.exists(target_path):
             return bpy.ops.import_3dm.some_data('INVOKE_DEFAULT', update_materials=True, is_update=True, import_mode=self.import_mode)
