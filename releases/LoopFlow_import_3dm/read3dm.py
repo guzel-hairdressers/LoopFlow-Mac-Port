@@ -409,7 +409,11 @@ def read_3dm(context : bpy.types.Context, options : Dict[str, Any]) -> Set[str]:
     import_curves = options.get("import_curves", True)
     hidden_objects = []
 
-    for ob in model.Objects:
+    total_objs = len(model.Objects)
+    log_chunk = max(500, total_objs // 10) if total_objs > 0 else 500
+    converted_vis_count = 0
+
+    for idx, ob in enumerate(model.Objects):
         og = ob.Geometry
         if not og:
             continue
@@ -425,10 +429,15 @@ def read_3dm(context : bpy.types.Context, options : Dict[str, Any]) -> Set[str]:
             pass
 
         t = converters.convert_object(context, ob, model, layerids, materials, scale, link_options)
+        converted_vis_count += 1
+        
+        if (idx + 1) % log_chunk == 0 or (idx + 1) == total_objs:
+            profiler.step(f"9. Convert Visible Objects Batch ({idx + 1}/{total_objs})")
 
-    profiler.step(f"9. Convert Visible Objects ({len(model.Objects)} items)")
+    if total_objs == 0:
+        profiler.step("9. Convert Visible Objects (0 items)")
 
-    for ob in hidden_objects:
+    for h_idx, ob in enumerate(hidden_objects):
         try:
             t = converters.convert_object(context, ob, model, layerids, materials, scale, link_options)
             if t and hasattr(t, "hide_viewport"):

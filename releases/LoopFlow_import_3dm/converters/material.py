@@ -73,17 +73,29 @@ def metal_material(rm, bm):
 
 def glass_material(rm, bm):
     p = PrincipledBSDFWrapper(bm, is_readonly=False)
-    p.base_color = get_color_field(rm, "color")[0:3]
+    col = get_color_field(rm, "color")[0:3]
+    p.base_color = col
     p.transmission = 1.0
-    p.ior = get_float_field(rm, "ior")
+    p.roughness = 0.0
+    ior = get_float_field(rm, "ior")
+    p.ior = ior if ior > 0 else 1.52
+    
+    # 10% opacity in Viewport Display (Solid mode)
+    bm.diffuse_color = (col[0], col[1], col[2], 0.1)
 
 def pbr_material(rm, bm):
     p = PrincipledBSDFWrapper(bm, is_readonly=False)
-    p.base_color = get_color_field(rm, "pbr-base-color")[0:3]
+    col = get_color_field(rm, "pbr-base-color")[0:3]
+    p.base_color = col
     p.metallic = get_float_field(rm, "pbr-metallic")
-    p.roughness = get_float_field(rm, "pbr-roughness")
     p.transmission = 1.0 - get_float_field(rm, "pbr-opacity")
     p.ior = get_float_field(rm, "pbr-opacity-ior")
+
+    if p.transmission > 0.5:
+        p.roughness = 0.0
+        bm.diffuse_color = (col[0], col[1], col[2], 0.1)
+    else:
+        p.roughness = get_float_field(rm, "pbr-roughness")
 
 material_handlers = {
     'rdk-paint-material': paint_material, 'rdk-plaster-material': plaster_material,
@@ -108,8 +120,13 @@ def harvest_from_rhino_material(mat, bm):
     
     if hasattr(mat, "Transparency") and mat.Transparency > 0:
         p.transmission = float(mat.Transparency)
-        
-    if hasattr(mat, "Shine"):
+        if mat.Transparency > 0.5:
+            p.roughness = 0.0
+            bm.diffuse_color = (col[0], col[1], col[2], 0.1)
+        else:
+            if hasattr(mat, "Shine"):
+                p.roughness = max(0.05, 1.0 - (float(mat.Shine) / 255.0))
+    elif hasattr(mat, "Shine"):
         p.roughness = max(0.05, 1.0 - (float(mat.Shine) / 255.0))
 
 def handle_embedded_files(model):
