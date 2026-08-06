@@ -417,25 +417,31 @@ class RHINO_OT_QuickSync(bpy.types.Operator):
 
         target_path = ""
 
-        # Priority 1: User explicitly specified/selected a .3dm file path in Blender UI
-        if path and os.path.exists(path) and path.endswith(".3dm"):
+        # Smart target path auto-resolution:
+        # 1. Read active_filepath from R2B_Sync.json (written by Fast Link in Rhino)
+        sync_meta = {}
+        json_mtime = 0
+        if os.path.exists(SYNC_JSON_FILE):
+            try:
+                json_mtime = os.path.getmtime(SYNC_JSON_FILE)
+                with open(SYNC_JSON_FILE, 'r', encoding='utf-8') as f:
+                    sync_meta = json.load(f)
+            except Exception:
+                pass
+
+        active_filepath = sync_meta.get("active_filepath", "")
+        path_mtime = os.path.getmtime(path) if (path and os.path.exists(path)) else 0
+
+        # If Fast Link was executed in Rhino after the current Blender scene path was modified, use active_filepath
+        if active_filepath and os.path.exists(active_filepath) and (not path or json_mtime > path_mtime):
+            target_path = active_filepath
+        elif path and os.path.exists(path) and path.endswith(".3dm"):
             target_path = path
+        elif active_filepath and os.path.exists(active_filepath):
+            target_path = active_filepath
         else:
-            # Priority 2: Fall back to R2B_Sync.json active_filepath
-            sync_meta = {}
-            if os.path.exists(SYNC_JSON_FILE):
-                try:
-                    with open(SYNC_JSON_FILE, 'r', encoding='utf-8') as f:
-                        sync_meta = json.load(f)
-                except Exception:
-                    pass
-
-            active_filepath = sync_meta.get("active_filepath", "")
             fallback_filepath = sync_meta.get("fallback_filepath", "")
-
-            if active_filepath and os.path.exists(active_filepath):
-                target_path = active_filepath
-            elif fallback_filepath and os.path.exists(fallback_filepath):
+            if fallback_filepath and os.path.exists(fallback_filepath):
                 target_path = fallback_filepath
 
         if not target_path or not os.path.exists(target_path):
