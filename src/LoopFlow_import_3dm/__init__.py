@@ -417,12 +417,11 @@ class RHINO_OT_QuickSync(bpy.types.Operator):
 
         target_path = ""
 
-        if is_standalone:
-            if path and os.path.exists(path) and path.endswith(".3dm"):
-                target_path = path
-            else:
-                return bpy.ops.import_3dm.some_data('INVOKE_DEFAULT', update_materials=True, is_update=(not is_override), import_mode=self.import_mode)
+        # Priority 1: User explicitly specified/selected a .3dm file path in Blender UI
+        if path and os.path.exists(path) and path.endswith(".3dm"):
+            target_path = path
         else:
+            # Priority 2: Fall back to R2B_Sync.json active_filepath
             sync_meta = {}
             if os.path.exists(SYNC_JSON_FILE):
                 try:
@@ -436,16 +435,11 @@ class RHINO_OT_QuickSync(bpy.types.Operator):
 
             if active_filepath and os.path.exists(active_filepath):
                 target_path = active_filepath
-            elif path and os.path.exists(path) and path.endswith(".3dm"):
-                target_path = path
             elif fallback_filepath and os.path.exists(fallback_filepath):
                 target_path = fallback_filepath
 
         if not target_path or not os.path.exists(target_path):
-            if not is_standalone:
-                self.report({'ERROR'}, f"No active sync file found in {DATA_DIR}. Please run Fast Sync or Advanced Sync in Rhino first!")
-                return {'CANCELLED'}
-            return bpy.ops.import_3dm.some_data('INVOKE_DEFAULT', update_materials=True, is_update=(not is_override), import_mode=self.import_mode)
+            return bpy.ops.import_3dm.some_data('INVOKE_DEFAULT', update_materials=True, is_update=True, import_mode=self.import_mode)
 
         context.scene.rhino_update_path = target_path
 

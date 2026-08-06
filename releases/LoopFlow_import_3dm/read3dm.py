@@ -174,7 +174,12 @@ def read_3dm(context : bpy.types.Context, options : Dict[str, Any]) -> Set[str]:
     # 1. INITIALIZE & READ SYNC METADATA
     converters.initialize(context)
     
+    file_stem = Path(filepath).stem if filepath else "R2B"
+    file_mtime = os.path.getmtime(filepath) if (filepath and os.path.exists(filepath)) else 0
+    file_size = os.path.getsize(filepath) if (filepath and os.path.exists(filepath)) else 0
+
     sync_candidates = [
+        os.path.join(data_dir, f"R2B_Sync_{file_stem}.json"),
         os.path.join(data_dir, "R2B_Sync.json"),
         os.path.expanduser("~/Library/Application Support/McNeel/Rhinoceros/8.0/scripts/LoopFlow_R2B/Data/R2B_Sync.json")
     ]
@@ -199,6 +204,12 @@ def read_3dm(context : bpy.types.Context, options : Dict[str, Any]) -> Set[str]:
         except Exception:
             pass
 
+    # Verify if sync_meta matches target filepath
+    active_fp = sync_meta.get("active_filepath", "")
+    if active_fp and filepath and Path(active_fp).stem != file_stem:
+        # JSON belongs to a different 3DM file, ignore delta
+        sync_meta = {}
+
     profiler.step("1. Read Sync Metadata (R2B_Sync.json)")
 
     geom_changed = sync_meta.get("geometry_changed", True)
@@ -210,6 +221,14 @@ def read_3dm(context : bpy.types.Context, options : Dict[str, Any]) -> Set[str]:
     layer_manifest = sync_meta.get("layers", {})
 
     has_geom_delta = bool(added_guids or removed_guids or modified_guids)
+
+    # UNCHANGED FILE SIGNATURE SKIP CHECK
+    if is_update and toplayer and not sync_meta:
+        last_mtime = toplayer.get("last_sync_mtime", 0)
+        last_size = toplayer.get("last_sync_size", 0)
+        if last_mtime == file_mtime and last_size == file_size:
+            profiler.finish(f"File {file_stem}.3dm unchanged since last sync (Skipped)")
+            return {'FINISHED'}
 
     # INSTANT FAST PATH 1: NO GEOMETRY DELTAS OR geom_changed IS FALSE (< 0.05s)
     if is_update and (geom_changed is False or not has_geom_delta) and is_imported:
@@ -471,6 +490,10 @@ def read_3dm(context : bpy.types.Context, options : Dict[str, Any]) -> Set[str]:
         _apply_layer_visibilities(vl.layer_collection, layer_visibility)
     except Exception as e:
         print(f"LoopFlow: Exception applying layer visibilities: {e}")
+
+    if toplayer and filepath and os.path.exists(filepath):
+        toplayer["last_sync_mtime"] = os.path.getmtime(filepath)
+        toplayer["last_sync_size"] = os.path.getsize(filepath)
 
     profiler.step("12. Apply Layer Visibilities to View Layer")
     profiler.finish(f"Full Model Import Complete ({len(context.blend_data.objects)} total objects in scene)")
