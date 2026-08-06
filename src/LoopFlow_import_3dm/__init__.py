@@ -585,6 +585,10 @@ class RHINO_PT_QuickUpdate(bpy.types.Panel):
         col_upd.scale_y = 1.3
         col_upd.operator("import_3dm.quick_sync", text="Model Sync", icon='FILE_REFRESH').import_mode = 'SYNC'
 
+        row_model_path = box_model.row(align=True)
+        row_model_path.prop(scene, "rhino_update_path", text="")
+        row_model_path.operator("import_3dm.reset_path", text="", icon='VIEWZOOM')
+
         row_import = box_model.row(align=True)
         row_import.scale_y = 1.2
         op_app = row_import.operator("import_3dm.quick_sync", text="Import (Append)", icon='ADD')
@@ -597,15 +601,9 @@ class RHINO_PT_QuickUpdate(bpy.types.Panel):
         col_mat = box_model.column(align=False)
         col_mat.prop(scene, "rhino_material_merge_mode", text="Material Merge")
 
-        box_model.separator(factor=0.5)
-
         col_mesh = box_model.column(align=True)
         col_mesh.prop(scene, "rhino_nurbs_density", text="NURBS Density", slider=True)
         col_mesh.prop(scene, "rhino_subd_subsurf_level", text="SubD Subdivisions")
-
-        row_model_path = box_model.row(align=True)
-        row_model_path.prop(scene, "rhino_update_path", text="")
-        row_model_path.operator("import_3dm.reset_path", text="", icon='VIEWZOOM')
 
         layout.separator()
 
