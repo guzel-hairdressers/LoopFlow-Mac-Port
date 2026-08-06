@@ -452,6 +452,8 @@ class RHINO_OT_QuickSync(bpy.types.Operator):
             import_curves=getattr(context.scene, "rhino_import_curves", False),
             import_meshes=getattr(context.scene, "rhino_import_meshes", True),
             weld_meshes=getattr(context.scene, "rhino_weld_meshes", True),
+            nurbs_density=getattr(context.scene, "rhino_nurbs_density", 0.5),
+            subd_subsurf_level=getattr(context.scene, "rhino_subd_subsurf_level", 1),
             update_materials=self.update_mats,
             is_update=not self.update_mats
         )
@@ -485,6 +487,8 @@ class Import3dm(bpy.types.Operator, ImportHelper):
     import_curves: bpy.props.BoolProperty(name="Curves", default=False)
     import_meshes: bpy.props.BoolProperty(name="Meshes", default=True)
     weld_meshes: bpy.props.BoolProperty(name="Weld Meshes", default=True)
+    nurbs_density: bpy.props.FloatProperty(name="NURBS Density", default=0.5, min=0.0, max=1.0)
+    subd_subsurf_level: bpy.props.IntProperty(name="SubD Subdivisions", default=1, min=0, max=5)
     update_materials: bpy.props.BoolProperty(name="Update Materials", default=False)
     is_update: bpy.props.BoolProperty(name="Is Update", default=False)
 
@@ -515,6 +519,10 @@ class RHINO_PT_QuickUpdate(bpy.types.Panel):
         row_opts = box_model.row(align=True)
         row_opts.prop(scene, "rhino_weld_meshes", text="Weld Meshes")
         row_opts.prop(scene, "rhino_import_curves", text="Import Curves")
+
+        col_mesh = box_model.column(align=True)
+        col_mesh.prop(scene, "rhino_nurbs_density", text="NURBS Density", slider=True)
+        col_mesh.prop(scene, "rhino_subd_subsurf_level", text="SubD Subdivisions")
 
         row_model_path = box_model.row(align=True)
         row_model_path.prop(scene, "rhino_update_path", text="")
@@ -581,6 +589,21 @@ def register():
         description="Weld mesh vertices",
         default=True
     )
+    bpy.types.Scene.rhino_nurbs_density = bpy.props.FloatProperty(
+        name="NURBS Density",
+        description="NURBS render mesh polygonization resolution slider (0.0 = Fewer Polygons / Fast, 1.0 = More Polygons / Smooth)",
+        default=0.5,
+        min=0.0,
+        max=1.0,
+        subtype='FACTOR'
+    )
+    bpy.types.Scene.rhino_subd_subsurf_level = bpy.props.IntProperty(
+        name="SubD Subdivisions",
+        description="Number of subdivisions for SubD objects (Blender Subdivision Surface modifier level)",
+        default=1,
+        min=0,
+        max=5
+    )
     bpy.types.Scene.rhino_cam_scale = bpy.props.FloatProperty(
         name="Scale Factor",
         description="Scale factor from Rhino units to Blender meters",
@@ -612,6 +635,8 @@ def unregister():
     del bpy.types.Scene.rhino_import_curves
     del bpy.types.Scene.rhino_import_meshes
     del bpy.types.Scene.rhino_weld_meshes
+    del bpy.types.Scene.rhino_nurbs_density
+    del bpy.types.Scene.rhino_subd_subsurf_level
     del bpy.types.Scene.rhino_cam_scale
     del bpy.types.Scene.rhino_cam_lens_mult
 

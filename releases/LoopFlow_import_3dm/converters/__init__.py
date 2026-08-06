@@ -156,6 +156,25 @@ def convert_object(
     blender_object.hide_viewport = False
     blender_object.hide_render = False
 
+    # 1. Apply SubD Subdivision Surface modifier based on user UI slider
+    if ob.Geometry.ObjectType == r3d.ObjectType.SubD and blender_object and type(blender_object) == bpy.types.Object:
+        subd_level = options.get("subd_subsurf_level", 1)
+        if subd_level > 0:
+            mod = blender_object.modifiers.get("Subdivision")
+            if not mod:
+                mod = blender_object.modifiers.new("Subdivision", 'SUBSURF')
+            mod.levels = subd_level
+            mod.render_levels = subd_level
+            mod.boundary_smooth = 'ALL'
+
+    # 2. Apply NURBS resolution_u / resolution_v based on user UI density slider
+    if data and hasattr(data, "resolution_u"):
+        density = options.get("nurbs_density", 0.5)
+        res = int(4 + round(density * 28))
+        data.resolution_u = res
+        if hasattr(data, "resolution_v"):
+            data.resolution_v = res
+
     if ob.Geometry.ObjectType == r3d.ObjectType.InstanceReference and options.get("import_instances", True):
         import_instance_reference(context, ob, blender_object, name, scale, options)
 
