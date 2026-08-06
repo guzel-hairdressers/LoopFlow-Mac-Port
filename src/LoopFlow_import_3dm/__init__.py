@@ -372,27 +372,32 @@ class RHINO_OT_QuickSync(bpy.types.Operator):
 
     @classmethod
     def description(cls, context, properties):
-        if getattr(properties, 'update_mats', False):
-            return "Import 3DM model from specified file path or open file browser"
-        return "Update geometry only, preserving materials and layer states"
+        mode = getattr(properties, 'import_mode', 'SYNC')
+        if mode == 'OVERRIDE':
+            return "Import 3DM model, replacing existing LoopFlow collection objects"
+        elif mode == 'APPEND':
+            return "Import 3DM model, appending geometry to existing layers and merging materials"
+        return "Synchronize model updates with active Rhino session"
 
+    import_mode: bpy.props.StringProperty(default='SYNC')
     update_mats: bpy.props.BoolProperty(default=False)
 
     def execute(self, context):
+        is_standalone = (self.import_mode in ('OVERRIDE', 'APPEND')) or self.update_mats
+        is_override = (self.import_mode == 'OVERRIDE')
+        is_append = (self.import_mode == 'APPEND')
+
         raw_path = context.scene.rhino_update_path
         path = bpy.path.abspath(raw_path) if raw_path else ""
 
         target_path = ""
 
-        if self.update_mats:
-            # Standalone permanent import from specified location
+        if is_standalone:
             if path and os.path.exists(path) and path.endswith(".3dm"):
                 target_path = path
             else:
-                # Open native file browser dialog if path is empty/invalid
-                return bpy.ops.import_3dm.some_data('INVOKE_DEFAULT', update_materials=True, is_update=False)
+                return bpy.ops.import_3dm.some_data('INVOKE_DEFAULT', update_materials=True, is_update=(not is_override), import_mode=self.import_mode)
         else:
-            # Live Sync mode
             sync_meta = {}
             if os.path.exists(SYNC_JSON_FILE):
                 try:
@@ -412,12 +417,23 @@ class RHINO_OT_QuickSync(bpy.types.Operator):
                 target_path = fallback_filepath
 
         if not target_path or not os.path.exists(target_path):
-            if not self.update_mats:
+            if not is_standalone:
                 self.report({'ERROR'}, f"No active sync file found in {DATA_DIR}. Please run Fast Sync or Advanced Sync in Rhino first!")
                 return {'CANCELLED'}
-            return bpy.ops.import_3dm.some_data('INVOKE_DEFAULT', update_materials=True, is_update=False)
+            return bpy.ops.import_3dm.some_data('INVOKE_DEFAULT', update_materials=True, is_update=(not is_override), import_mode=self.import_mode)
 
         context.scene.rhino_update_path = target_path
+
+        # If OVERRIDE mode, clear existing LoopFlow collection objects first
+        if is_override:
+            master_col = bpy.data.collections.get("LoopFlow")
+            if master_col:
+                objs_to_delete = get_all_objects_in_collection(master_col)
+                for obj in objs_to_delete:
+                    try:
+                        bpy.data.objects.remove(obj, do_unlink=True)
+                    except Exception:
+                        pass
 
         # 1. Ensure master top-level 'LoopFlow' collection exists in Scene Collection
         master_col_name = "LoopFlow"
@@ -430,7 +446,6 @@ class RHINO_OT_QuickSync(bpy.types.Operator):
             except Exception:
                 pass
 
-        # Always route through 3DM engine (read_3dm)
         col_states = {}
         def capture_col_states(lc):
             col_states[lc.collection.name] = {
@@ -442,7 +457,7 @@ class RHINO_OT_QuickSync(bpy.types.Operator):
             for child in lc.children:
                 capture_col_states(child)
 
-        if not self.update_mats:
+        if not is_standalone:
             capture_col_states(context.view_layer.layer_collection)
 
         three_dm_path = target_path if target_path.endswith(".3dm") else os.path.splitext(target_path)[0] + ".3dm"
@@ -454,13 +469,14 @@ class RHINO_OT_QuickSync(bpy.types.Operator):
             weld_meshes=getattr(context.scene, "rhino_weld_meshes", True),
             nurbs_density=getattr(context.scene, "rhino_nurbs_density", 0.5),
             subd_subsurf_level=getattr(context.scene, "rhino_subd_subsurf_level", 1),
-            update_materials=self.update_mats,
-            is_update=not self.update_mats
+            update_materials=is_standalone,
+            is_update=(not is_override),
+            import_mode=self.import_mode
         )
 
-        merged = merge_duplicate_materials()
+        merged_count = merge_duplicate_materials()
 
-        if not self.update_mats and col_states:
+        if not is_standalone and col_states:
             def restore_col_states(lc):
                 if lc.collection.name in col_states:
                     state = col_states[lc.collection.name]
@@ -472,8 +488,14 @@ class RHINO_OT_QuickSync(bpy.types.Operator):
 
             restore_col_states(context.view_layer.layer_collection)
 
-        op_name = "Model imported" if self.update_mats else "Model synchronized"
-        self.report({'INFO'}, f"{op_name} cleanly ({os.path.basename(three_dm_path)}).")
+        if is_override:
+            msg = f"Imported & Replaced LoopFlow model ({os.path.basename(three_dm_path)})."
+        elif is_append:
+            msg = f"Appended model ({os.path.basename(three_dm_path)}). Merged {merged_count} duplicate materials."
+        else:
+            msg = f"Model synchronized cleanly ({os.path.basename(three_dm_path)})."
+
+        self.report({'INFO'}, msg)
         return {'FINISHED'}
 
 # -------------------------------------------------------------------
@@ -489,6 +511,7 @@ class Import3dm(bpy.types.Operator, ImportHelper):
     weld_meshes: bpy.props.BoolProperty(name="Weld Meshes", default=True)
     nurbs_density: bpy.props.FloatProperty(name="NURBS Density", default=0.5, min=0.0, max=1.0)
     subd_subsurf_level: bpy.props.IntProperty(name="SubD Subdivisions", default=1, min=0, max=5)
+    import_mode: bpy.props.StringProperty(default='SYNC')
     update_materials: bpy.props.BoolProperty(name="Update Materials", default=False)
     is_update: bpy.props.BoolProperty(name="Is Update", default=False)
 
@@ -511,10 +534,17 @@ class RHINO_PT_QuickUpdate(bpy.types.Panel):
         layout.label(text="Model Sync", icon='MESH_DATA')
         box_model = layout.box()
 
-        col_upd = box_model.column(align=True)
+        col_upd = box_model.column()
         col_upd.scale_y = 1.3
-        col_upd.operator("import_3dm.quick_sync", text="Model Sync", icon='FILE_REFRESH').update_mats = False
-        col_upd.operator("import_3dm.quick_sync", text="Import Model", icon='IMPORT').update_mats = True
+        col_upd.operator("import_3dm.quick_sync", text="Model Sync", icon='FILE_REFRESH').import_mode = 'SYNC'
+
+        row_import = box_model.row(align=True)
+        row_import.scale_y = 1.2
+        op_ovr = row_import.operator("import_3dm.quick_sync", text="Import (Override)", icon='TRASH')
+        op_ovr.import_mode = 'OVERRIDE'
+        
+        op_app = row_import.operator("import_3dm.quick_sync", text="Import (Append)", icon='ADD')
+        op_app.import_mode = 'APPEND'
 
         row_opts = box_model.row(align=True)
         row_opts.prop(scene, "rhino_weld_meshes", text="Weld Meshes")

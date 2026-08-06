@@ -40,8 +40,9 @@ LoopFlow-Mac-Port/
 - **Active Directory Dual Sync**: Rhino toolbar macros execute scripts from `LoopFlow_R2B/Py/`. Developer build scripts MUST synchronize source edits to **both** `Py/` and `Python/` subdirectories.
 
 ### B. Blender 5.2 Side
-- **Model Sync Button (`RHINO_OT_QuickSync`, `update_mats=False`)**: Synchronizes live updates with active Rhino session data from `R2B_Sync.json`, updating layer visibilities in **< 0.06s**.
-- **Import Model Button (`RHINO_OT_QuickSync`, `update_mats=True`)**: Performs a standalone permanent import. Prioritizes the user-specified `.3dm` path from `rhino_update_path`. If empty or invalid, automatically opens Blender's native file browser (`INVOKE_DEFAULT`) to select any `.3dm` model on disk.
+- **Model Sync Button (`RHINO_OT_QuickSync`, `import_mode='SYNC'`)**: Synchronizes live updates with active Rhino session data from `R2B_Sync.json`, updating layer visibilities in **< 0.06s**.
+- **Import (Override) Button (`RHINO_OT_QuickSync`, `import_mode='OVERRIDE'`)**: Standalone import that clears existing `LoopFlow` master collection objects first, replacing the model with a fresh 3DM import.
+- **Import (Append) Button (`RHINO_OT_QuickSync`, `import_mode='APPEND'`)**: Standalone import that appends new geometry to existing collections with matching layer names/GUIDs, and automatically merges duplicate materials (`merge_duplicate_materials()`).
 
 ---
 
