@@ -111,13 +111,35 @@ def harvest_from_rendercontent(model, mat, bm):
 def harvest_from_rhino_material(mat, bm):
     bm.use_nodes = True
     p = PrincipledBSDFWrapper(bm, is_readonly=False)
-    
+
+    # 1. Check Rhino 8 PhysicallyBased PBR properties
+    if hasattr(mat, "PhysicallyBased") and mat.PhysicallyBased and mat.PhysicallyBased.Supported:
+        pb = mat.PhysicallyBased
+        bc = pb.BaseColor
+        col = (bc[0], bc[1], bc[2])
+        p.base_color = col
+        p.metallic = float(pb.Metallic)
+        p.transmission = float(1.0 - pb.Opacity)
+        ior = float(pb.OpacityIOR)
+        p.ior = ior if ior > 0 else 1.52
+
+        if p.transmission > 0.5:
+            p.roughness = 0.0
+            bm.diffuse_color = (col[0], col[1], col[2], 0.1)
+        else:
+            p.roughness = float(pb.Roughness)
+        return
+
+    # 2. Fallback for standard Rhino materials
     col = (0.8, 0.8, 0.8)
     if hasattr(mat, "DiffuseColor"):
         dc = mat.DiffuseColor
         col = srgb_eotf((dc[0] / 255.0, dc[1] / 255.0, dc[2] / 255.0))
     p.base_color = col[0:3]
-    
+
+    if hasattr(mat, "Reflectivity") and mat.Reflectivity > 0:
+        p.metallic = float(mat.Reflectivity)
+
     if hasattr(mat, "Transparency") and mat.Transparency > 0:
         p.transmission = float(mat.Transparency)
         if mat.Transparency > 0.5:
@@ -141,8 +163,10 @@ def handle_materials(context, model : r3d.File3dm, materials, update):
         if d_name not in materials:
             tags = utils.create_tag_dict(d_id, d_name)
             blmat = utils.get_or_create_iddata(context.blend_data.materials, tags, None)
-            if not blmat.use_nodes:
+            is_harvested = blmat.get("rh_harvested", False)
+            if update or not is_harvested:
                 d_handler(blmat)
+                blmat["rh_harvested"] = True
             materials[d_name] = blmat
             materials[-1] = blmat
 
@@ -160,11 +184,13 @@ def handle_materials(context, model : r3d.File3dm, materials, update):
         tags = utils.create_tag_dict(mat_guid, matname)
         blmat = utils.get_or_create_iddata(context.blend_data.materials, tags, None)
         
-        if update or not blmat.use_nodes:
+        is_harvested = blmat.get("rh_harvested", False)
+        if update or not is_harvested:
             if m:
                 harvest_from_rendercontent(model, m, blmat)
             else:
                 harvest_from_rhino_material(mat, blmat)
+            blmat["rh_harvested"] = True
             
         materials[mid] = blmat
         materials[str(mat_guid)] = blmat
