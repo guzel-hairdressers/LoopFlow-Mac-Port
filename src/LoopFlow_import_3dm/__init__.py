@@ -581,17 +581,16 @@ class RHINO_PT_QuickUpdate(bpy.types.Panel):
         layout.label(text="Model Sync", icon='MESH_DATA')
         box_model = layout.box()
 
-        col_upd = box_model.column()
-        col_upd.scale_y = 1.3
-        col_upd.operator("import_3dm.quick_sync", text="Model Sync", icon='FILE_REFRESH').import_mode = 'SYNC'
-
         row_model_path = box_model.row(align=True)
         row_model_path.prop(scene, "rhino_update_path", text="")
         row_model_path.operator("import_3dm.reset_path", text="", icon='VIEWZOOM')
 
-        row_import = box_model.row(align=True)
-        row_import.scale_y = 1.2
-        op_app = row_import.operator("import_3dm.quick_sync", text="Import (Append)", icon='ADD')
+        row_btns = box_model.row(align=True)
+        row_btns.scale_y = 1.3
+        op_sync = row_btns.operator("import_3dm.quick_sync", text="Sync", icon='FILE_REFRESH')
+        op_sync.import_mode = 'SYNC'
+
+        op_app = row_btns.operator("import_3dm.quick_sync", text="Append", icon='ADD')
         op_app.import_mode = 'APPEND'
 
         row_opts = box_model.row(align=True)
