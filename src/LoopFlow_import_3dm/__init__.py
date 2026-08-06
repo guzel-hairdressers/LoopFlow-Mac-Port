@@ -580,10 +580,14 @@ class RHINO_PT_QuickUpdate(bpy.types.Panel):
         row_opts.prop(scene, "rhino_weld_meshes", text="Weld Meshes")
         row_opts.prop(scene, "rhino_import_curves", text="Import Curves")
 
+        col_mat = box_model.column(align=False)
+        col_mat.prop(scene, "rhino_material_merge_mode", text="Material Merge")
+
+        box_model.separator(factor=0.5)
+
         col_mesh = box_model.column(align=True)
         col_mesh.prop(scene, "rhino_nurbs_density", text="NURBS Density", slider=True)
         col_mesh.prop(scene, "rhino_subd_subsurf_level", text="SubD Subdivisions")
-        col_mesh.prop(scene, "rhino_material_merge_mode", text="Material Merge")
 
         row_model_path = box_model.row(align=True)
         row_model_path.prop(scene, "rhino_update_path", text="")
