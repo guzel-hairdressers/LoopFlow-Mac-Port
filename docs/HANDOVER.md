@@ -43,6 +43,7 @@ LoopFlow-Mac-Port/
 - **Model Sync Button (`RHINO_OT_QuickSync`, `import_mode='SYNC'`)**: Synchronizes live updates with active Rhino session data from `R2B_Sync.json`, updating layer visibilities in **< 0.06s**.
 - **Import (Override) Button (`RHINO_OT_QuickSync`, `import_mode='OVERRIDE'`)**: Standalone import that clears existing `LoopFlow` master collection objects first, replacing the model with a fresh 3DM import.
 - **Import (Append) Button (`RHINO_OT_QuickSync`, `import_mode='APPEND'`)**: Standalone import that appends new geometry to existing collections with matching layer names/GUIDs, and automatically merges duplicate materials (`merge_duplicate_materials()`).
+- **SubD Subdivision Level Control (`0` to `5`)**: Imports SubD objects with a single `Subdivision` modifier. Set default to **3** subdivisions for smooth viewport and render geometry. SubD mesh is created directly from Rhino's unsubdivided base control net.
 
 ---
 

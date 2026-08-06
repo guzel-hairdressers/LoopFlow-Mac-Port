@@ -156,9 +156,9 @@ def convert_object(
     blender_object.hide_viewport = False
     blender_object.hide_render = False
 
-    # 1. Apply SubD Subdivision Surface modifier based on user UI slider
+    # 1. Apply single Subdivision Surface modifier based on user UI slider (default 3)
     if ob.Geometry.ObjectType == r3d.ObjectType.SubD and blender_object and type(blender_object) == bpy.types.Object:
-        subd_level = options.get("subd_subsurf_level", 1)
+        subd_level = options.get("subd_subsurf_level", 3)
         if subd_level > 0:
             mod = blender_object.modifiers.get("Subdivision")
             if not mod:
@@ -177,14 +177,6 @@ def convert_object(
 
     if ob.Geometry.ObjectType == r3d.ObjectType.InstanceReference and options.get("import_instances", True):
         import_instance_reference(context, ob, blender_object, name, scale, options)
-
-    # If subd, apply subdivision modifier
-    if ob.Geometry.ObjectType == r3d.ObjectType.SubD:
-        if blender_object.modifiers.find("SubD") == -1:
-            level = 3
-            blender_object.modifiers.new(type="SUBSURF", name="SubD")
-            blender_object.modifiers["SubD"].levels = level
-            blender_object.modifiers["SubD"].render_levels = level
 
     # Import Rhino user strings
     for pair in ob.Attributes.GetUserStrings():

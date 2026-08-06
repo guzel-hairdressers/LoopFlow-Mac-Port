@@ -468,9 +468,9 @@ class RHINO_OT_QuickSync(bpy.types.Operator):
             import_meshes=getattr(context.scene, "rhino_import_meshes", True),
             weld_meshes=getattr(context.scene, "rhino_weld_meshes", True),
             nurbs_density=getattr(context.scene, "rhino_nurbs_density", 0.5),
-            subd_subsurf_level=getattr(context.scene, "rhino_subd_subsurf_level", 1),
+            subd_subsurf_level=getattr(context.scene, "rhino_subd_subsurf_level", 3),
             update_materials=is_standalone,
-            is_update=(not is_override),
+            is_update=(is_append or (not is_override)),
             import_mode=self.import_mode
         )
 
@@ -510,13 +510,17 @@ class Import3dm(bpy.types.Operator, ImportHelper):
     import_meshes: bpy.props.BoolProperty(name="Meshes", default=True)
     weld_meshes: bpy.props.BoolProperty(name="Weld Meshes", default=True)
     nurbs_density: bpy.props.FloatProperty(name="NURBS Density", default=0.5, min=0.0, max=1.0)
-    subd_subsurf_level: bpy.props.IntProperty(name="SubD Subdivisions", default=1, min=0, max=5)
+    subd_subsurf_level: bpy.props.IntProperty(name="SubD Subdivisions", default=3, min=0, max=5)
     import_mode: bpy.props.StringProperty(default='SYNC')
     update_materials: bpy.props.BoolProperty(name="Update Materials", default=False)
     is_update: bpy.props.BoolProperty(name="Is Update", default=False)
 
     def execute(self, context):
         options = self.as_keywords(ignore=("filter_glob",))
+        if options.get("import_mode") == "APPEND":
+            options["is_update"] = True
+        elif options.get("import_mode") == "OVERRIDE":
+            options["is_update"] = False
         return read_3dm(context, options)
 
 class RHINO_PT_QuickUpdate(bpy.types.Panel):
@@ -630,7 +634,7 @@ def register():
     bpy.types.Scene.rhino_subd_subsurf_level = bpy.props.IntProperty(
         name="SubD Subdivisions",
         description="Number of subdivisions for SubD objects (Blender Subdivision Surface modifier level)",
-        default=1,
+        default=3,
         min=0,
         max=5
     )
