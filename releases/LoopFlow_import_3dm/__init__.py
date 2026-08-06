@@ -373,49 +373,49 @@ class RHINO_OT_QuickSync(bpy.types.Operator):
     @classmethod
     def description(cls, context, properties):
         if getattr(properties, 'update_mats', False):
-            return "Import model and update materials"
+            return "Import 3DM model from specified file path or open file browser"
         return "Update geometry only, preserving materials and layer states"
 
     update_mats: bpy.props.BoolProperty(default=False)
 
     def execute(self, context):
-        sync_meta = {}
-        if os.path.exists(SYNC_JSON_FILE):
-            try:
-                with open(SYNC_JSON_FILE, 'r', encoding='utf-8') as f:
-                    sync_meta = json.load(f)
-            except Exception:
-                pass
-
-        active_filepath = sync_meta.get("active_filepath", "")
-        fallback_filepath = sync_meta.get("fallback_filepath", "")
-        export_format = sync_meta.get("export_format", "OBJ")
-
         raw_path = context.scene.rhino_update_path
-        path = bpy.path.abspath(raw_path)
+        path = bpy.path.abspath(raw_path) if raw_path else ""
 
         target_path = ""
-        if active_filepath and os.path.exists(active_filepath):
-            target_path = active_filepath
-        elif fallback_filepath and os.path.exists(fallback_filepath):
-            target_path = fallback_filepath
-        elif path and os.path.exists(path) and not path.endswith("subd_test.obj"):
-            target_path = path
+
+        if self.update_mats:
+            # Standalone permanent import from specified location
+            if path and os.path.exists(path) and path.endswith(".3dm"):
+                target_path = path
+            else:
+                # Open native file browser dialog if path is empty/invalid
+                return bpy.ops.import_3dm.some_data('INVOKE_DEFAULT', update_materials=True, is_update=False)
+        else:
+            # Live Sync mode
+            sync_meta = {}
+            if os.path.exists(SYNC_JSON_FILE):
+                try:
+                    with open(SYNC_JSON_FILE, 'r', encoding='utf-8') as f:
+                        sync_meta = json.load(f)
+                except Exception:
+                    pass
+
+            active_filepath = sync_meta.get("active_filepath", "")
+            fallback_filepath = sync_meta.get("fallback_filepath", "")
+
+            if active_filepath and os.path.exists(active_filepath):
+                target_path = active_filepath
+            elif path and os.path.exists(path) and path.endswith(".3dm"):
+                target_path = path
+            elif fallback_filepath and os.path.exists(fallback_filepath):
+                target_path = fallback_filepath
 
         if not target_path or not os.path.exists(target_path):
-            candidates = [
-                os.path.join(DATA_DIR, "R2B.obj"),
-                os.path.join(DATA_DIR, "R2B.3dm"),
-                DEFAULT_R2B_MODEL,
-            ]
-            for cand in candidates:
-                if cand and os.path.exists(cand):
-                    target_path = cand
-                    break
-
-        if not target_path or not os.path.exists(target_path):
-            self.report({'ERROR'}, f"No active sync file found in {DATA_DIR}. Please run Fast Sync or Advanced Sync in Rhino first!")
-            return {'CANCELLED'}
+            if not self.update_mats:
+                self.report({'ERROR'}, f"No active sync file found in {DATA_DIR}. Please run Fast Sync or Advanced Sync in Rhino first!")
+                return {'CANCELLED'}
+            return bpy.ops.import_3dm.some_data('INVOKE_DEFAULT', update_materials=True, is_update=False)
 
         context.scene.rhino_update_path = target_path
 
@@ -430,7 +430,7 @@ class RHINO_OT_QuickSync(bpy.types.Operator):
             except Exception:
                 pass
 
-        # Always route through 3DM Delta Sync engine (read_3dm)
+        # Always route through 3DM engine (read_3dm)
         col_states = {}
         def capture_col_states(lc):
             col_states[lc.collection.name] = {
@@ -446,8 +446,6 @@ class RHINO_OT_QuickSync(bpy.types.Operator):
             capture_col_states(context.view_layer.layer_collection)
 
         three_dm_path = target_path if target_path.endswith(".3dm") else os.path.splitext(target_path)[0] + ".3dm"
-        if not os.path.exists(three_dm_path):
-            three_dm_path = os.path.join(DATA_DIR, "R2B.3dm")
 
         bpy.ops.import_3dm.some_data(
             filepath=three_dm_path,
@@ -472,7 +470,8 @@ class RHINO_OT_QuickSync(bpy.types.Operator):
 
             restore_col_states(context.view_layer.layer_collection)
 
-        self.report({'INFO'}, f"Model updated cleanly ({os.path.basename(three_dm_path)}).")
+        op_name = "Model imported" if self.update_mats else "Model synchronized"
+        self.report({'INFO'}, f"{op_name} cleanly ({os.path.basename(three_dm_path)}).")
         return {'FINISHED'}
 
 # -------------------------------------------------------------------
