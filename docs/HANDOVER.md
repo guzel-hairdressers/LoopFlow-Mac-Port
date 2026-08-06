@@ -41,8 +41,13 @@ LoopFlow-Mac-Port/
 
 ### B. Blender 5.2 Side
 - **Model Sync Button (`RHINO_OT_QuickSync`, `import_mode='SYNC'`)**: Synchronizes live updates with active Rhino session data from `R2B_Sync.json`, updating layer visibilities in **< 0.06s**.
-- **Import (Override) Button (`RHINO_OT_QuickSync`, `import_mode='OVERRIDE'`)**: Standalone import that clears existing `LoopFlow` master collection objects first, replacing the model with a fresh 3DM import.
-- **Import (Append) Button (`RHINO_OT_QuickSync`, `import_mode='APPEND'`)**: Standalone import that appends new geometry to existing collections with matching layer names/GUIDs, and automatically merges duplicate materials (`merge_duplicate_materials()`).
+- **File-Level Collection Hierarchy**: Every imported `.3dm` file creates its own parent collection named after the **3DM filename** (e.g. `LoopFlow` -> `Game_Center_Roof` -> `Layers` -> `Layer1`, `Layer2`).
+- **Import (Override) Button (`RHINO_OT_QuickSync`, `import_mode='OVERRIDE'`)**: Non-destructive to other files! Clears/replaces ONLY the specific file collection named after the imported `.3dm` file inside `LoopFlow`, keeping all other imported files untouched.
+- **Import (Append) Button (`RHINO_OT_QuickSync`, `import_mode='APPEND'`)**: Appends the 3DM file as a new collection inside `LoopFlow` (e.g. `Game_Center_Roof.001`, `Game_Center_Roof.002`).
+- **Material Merge Modes (`rhino_material_merge_mode`)**:
+  - `Merge (Keep Existing)`: Remaps objects to existing Blender materials, keeping existing material settings intact.
+  - `Merge (Overwrite Existing)`: Remaps materials and updates existing Blender shader node inputs with newly imported material properties.
+  - `Keep Unique`: Keeps imported materials unique (`Material.001`, `Material.002`) without merging.
 - **SubD Subdivision Level Control (`0` to `5`)**: Imports SubD objects with a single `Subdivision` modifier. Set default to **3** subdivisions for smooth viewport and render geometry. SubD mesh is created directly from Rhino's unsubdivided base control net.
 
 ---

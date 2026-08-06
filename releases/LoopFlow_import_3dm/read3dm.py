@@ -77,9 +77,9 @@ class SubOpProfiler:
         except Exception as e:
             print(f"LoopFlow Profiler Warning: Could not write log file: {e}")
 
-def create_or_get_top_layer(context, filepath, is_update=False):
+def create_or_get_top_layer(context, filepath, is_update=False, import_mode='SYNC'):
     master_col_name = "LoopFlow"
-    top_collection_name = Path(filepath).stem if filepath else "R2B"
+    file_stem = Path(filepath).stem if filepath else "R2B"
 
     master_col = context.blend_data.collections.get(master_col_name)
     if not master_col:
@@ -90,54 +90,54 @@ def create_or_get_top_layer(context, filepath, is_update=False):
         except Exception:
             pass
 
-    toplayer = context.blend_data.collections.get(top_collection_name)
-    if not toplayer:
-        toplayer = context.blend_data.collections.new(name=top_collection_name)
-    if toplayer.name not in master_col.children:
-        try:
-            master_col.children.link(toplayer)
-        except Exception:
-            pass
+    if import_mode == 'OVERRIDE':
+        # OVERRIDE MODE: Remove ONLY the file collection matching file_stem inside LoopFlow
+        old_toplayer = context.blend_data.collections.get(file_stem)
+        if old_toplayer:
+            def remove_col_recursive(col):
+                for child in list(col.children):
+                    remove_col_recursive(child)
+                for obj in list(col.objects):
+                    try:
+                        context.blend_data.objects.remove(obj, do_unlink=True)
+                    except Exception:
+                        pass
+                try:
+                    context.blend_data.collections.remove(col, do_unlink=True)
+                except Exception:
+                    pass
 
-    if is_update:
+            remove_col_recursive(old_toplayer)
+            context.view_layer.update()
+
+        toplayer = context.blend_data.collections.new(name=file_stem)
+        master_col.children.link(toplayer)
         return toplayer
 
-    # Full Import: Batch unlink & remove old collections in C++ natively (< 0.5s)
-    if master_col and master_col.name in context.scene.collection.children:
-        try:
-            context.scene.collection.children.unlink(master_col)
-        except Exception:
-            pass
+    elif import_mode == 'APPEND':
+        # APPEND MODE: If file_stem collection exists inside LoopFlow, create file_stem.001, .002
+        top_name = file_stem
+        if top_name in context.blend_data.collections:
+            idx = 1
+            while f"{file_stem}.{idx:03d}" in context.blend_data.collections:
+                idx += 1
+            top_name = f"{file_stem}.{idx:03d}"
 
-    for c in list(context.blend_data.collections):
-        if c.name in (master_col_name, top_collection_name, "Layers", "Instance Definitions") or c.get('rhid') is not None:
+        toplayer = context.blend_data.collections.new(name=top_name)
+        master_col.children.link(toplayer)
+        return toplayer
+
+    else:
+        # LIVE SYNC MODE
+        toplayer = context.blend_data.collections.get(file_stem)
+        if not toplayer:
+            toplayer = context.blend_data.collections.new(name=file_stem)
+        if toplayer.name not in master_col.children:
             try:
-                context.blend_data.collections.remove(c, do_unlink=True)
+                master_col.children.link(toplayer)
             except Exception:
                 pass
-
-    # Batch purge orphan meshes & curves
-    for m in list(context.blend_data.meshes):
-        if m.users == 0:
-            try:
-                context.blend_data.meshes.remove(m)
-            except Exception:
-                pass
-
-    for cu in list(context.blend_data.curves):
-        if cu.users == 0:
-            try:
-                context.blend_data.curves.remove(cu)
-            except Exception:
-                pass
-
-    context.view_layer.update()
-
-    master_col = context.blend_data.collections.new(name=master_col_name)
-    context.scene.collection.children.link(master_col)
-
-    toplayer = context.blend_data.collections.new(name=top_collection_name)
-    master_col.children.link(toplayer)
+        return toplayer
     return toplayer
 
 def read_3dm(context : bpy.types.Context, options : Dict[str, Any]) -> Set[str]:
@@ -381,7 +381,7 @@ def read_3dm(context : bpy.types.Context, options : Dict[str, Any]) -> Set[str]:
     profiler.step(f"3. Read 3DM File from Disk ({os.path.getsize(filepath) / (1024*1024):.1f} MB)")
 
     options["rh_model"] = model
-    toplayer = create_or_get_top_layer(context, filepath, is_update=is_update)
+    toplayer = create_or_get_top_layer(context, filepath, is_update=is_update, import_mode=options.get("import_mode", "SYNC"))
     profiler.step("4. Create and Teardown Scene Collections")
 
     converters.utils.reset_all_dict(context)

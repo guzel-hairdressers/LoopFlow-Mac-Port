@@ -127,7 +127,16 @@ def _on_depsgraph_update_layer_collections(scene, depsgraph):
 # -------------------------------------------------------------------
 # 1. Core helper functions
 # -------------------------------------------------------------------
-def merge_duplicate_materials():
+def merge_duplicate_materials(mode='MERGE_KEEP'):
+    """
+    Material merge mode:
+      - 'MERGE_KEEP': Remap objects using Material.001 to base Material, keeping existing Blender settings
+      - 'MERGE_OVERWRITE': Copy BSDF node inputs from Material.001 to base Material, then remap & remove .001
+      - 'DUPLICATE': Do not merge, keep Material.001 as unique
+    """
+    if mode == 'DUPLICATE':
+        return 0
+
     count = 0
     for mat in list(bpy.data.materials):
         match = re.match(r"(.*)\.\d{3}$", mat.name)
@@ -135,6 +144,22 @@ def merge_duplicate_materials():
             base_name = match.group(1)
             base_mat = bpy.data.materials.get(base_name)
             if base_mat and base_mat != mat:
+                if mode == 'MERGE_OVERWRITE':
+                    try:
+                        if mat.use_nodes and base_mat.use_nodes:
+                            for node in mat.node_tree.nodes:
+                                if node.type == 'BSDF_PRINCIPLED':
+                                    base_bsdf = next((n for n in base_mat.node_tree.nodes if n.type == 'BSDF_PRINCIPLED'), None)
+                                    if base_bsdf:
+                                        for inp in node.inputs:
+                                            if inp.name in base_bsdf.inputs:
+                                                try:
+                                                    base_bsdf.inputs[inp.name].default_value = inp.default_value
+                                                except Exception:
+                                                    pass
+                    except Exception as e:
+                        print(f"LoopFlow: Error transferring material properties: {e}")
+
                 mat.user_remap(base_mat)
                 bpy.data.materials.remove(mat)
                 count += 1
@@ -474,7 +499,8 @@ class RHINO_OT_QuickSync(bpy.types.Operator):
             import_mode=self.import_mode
         )
 
-        merged_count = merge_duplicate_materials()
+        merge_mode = getattr(context.scene, "rhino_material_merge_mode", "MERGE_KEEP")
+        merged_count = merge_duplicate_materials(mode=merge_mode)
 
         if not is_standalone and col_states:
             def restore_col_states(lc):
@@ -557,6 +583,7 @@ class RHINO_PT_QuickUpdate(bpy.types.Panel):
         col_mesh = box_model.column(align=True)
         col_mesh.prop(scene, "rhino_nurbs_density", text="NURBS Density", slider=True)
         col_mesh.prop(scene, "rhino_subd_subsurf_level", text="SubD Subdivisions")
+        col_mesh.prop(scene, "rhino_material_merge_mode", text="Material Merge")
 
         row_model_path = box_model.row(align=True)
         row_model_path.prop(scene, "rhino_update_path", text="")
@@ -638,6 +665,16 @@ def register():
         min=0,
         max=5
     )
+    bpy.types.Scene.rhino_material_merge_mode = bpy.props.EnumProperty(
+        name="Material Merging",
+        description="Material merging behavior for imported models",
+        items=[
+            ('MERGE_KEEP', 'Merge (Keep Existing)', 'Merge matching materials, keeping existing Blender material settings'),
+            ('MERGE_OVERWRITE', 'Merge (Overwrite Existing)', 'Merge matching materials, updating existing settings with newly imported settings'),
+            ('DUPLICATE', 'Keep Unique', 'Do not merge materials, keeping duplicate materials as separate unique blocks'),
+        ],
+        default='MERGE_KEEP'
+    )
     bpy.types.Scene.rhino_cam_scale = bpy.props.FloatProperty(
         name="Scale Factor",
         description="Scale factor from Rhino units to Blender meters",
@@ -671,6 +708,7 @@ def unregister():
     del bpy.types.Scene.rhino_weld_meshes
     del bpy.types.Scene.rhino_nurbs_density
     del bpy.types.Scene.rhino_subd_subsurf_level
+    del bpy.types.Scene.rhino_material_merge_mode
     del bpy.types.Scene.rhino_cam_scale
     del bpy.types.Scene.rhino_cam_lens_mult
 
