@@ -540,7 +540,7 @@ class RHINO_PT_QuickUpdate(bpy.types.Panel):
 
         row_import = box_model.row(align=True)
         row_import.scale_y = 1.2
-        op_ovr = row_import.operator("import_3dm.quick_sync", text="Import (Override)", icon='TRASH')
+        op_ovr = row_import.operator("import_3dm.quick_sync", text="Import (Override)", icon='IMPORT')
         op_ovr.import_mode = 'OVERRIDE'
         
         op_app = row_import.operator("import_3dm.quick_sync", text="Import (Append)", icon='ADD')
