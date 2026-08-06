@@ -46,7 +46,6 @@ def FastLinkExport():
 
     filename_3dm = clean_doc_name + ".3dm"
     export_full_path = os.path.join(model_dir, filename_3dm)
-    fallback_path = os.path.join(model_dir, "R2B.3dm")
 
     try:
         # Use native C++ Write3dmFile API for 100% complete 3DM export (all layers & objects, 0.01s)
@@ -55,17 +54,10 @@ def FastLinkExport():
         opts.WriteSelectedObjectsOnly = False
 
         res = sc.doc.Write3dmFile(export_full_path, opts)
-        if res or os.path.exists(export_full_path):
-            if export_full_path != fallback_path:
-                sc.doc.Write3dmFile(fallback_path, opts)
-        else:
+        if not res and not os.path.exists(export_full_path):
             # Fallback to -_SaveAs command if Write3dmFile API fails
             cmd1 = f'-_SaveAs "{export_full_path}" _Enter'
             rs.Command(cmd1, False)
-
-            if export_full_path != fallback_path:
-                cmd2 = f'-_SaveAs "{fallback_path}" _Enter'
-                rs.Command(cmd2, False)
 
         t_elapsed = round(time.time() - t0, 2)
         obj_count = len(sc.doc.Objects)
@@ -74,10 +66,24 @@ def FastLinkExport():
         for ob in sc.doc.Objects:
             try:
                 rhid = str(ob.Id)
+                bbox_vals = []
+                if ob.Geometry:
+                    bbox = ob.Geometry.GetBoundingBox(True)
+                    if bbox and bbox.IsValid:
+                        bbox_vals = [
+                            round(bbox.Min.X, 4), round(bbox.Min.Y, 4), round(bbox.Min.Z, 4),
+                            round(bbox.Max.X, 4), round(bbox.Max.Y, 4), round(bbox.Max.Z, 4)
+                        ]
+                comp_sn = int(getattr(ob.Geometry, "ComponentSerialNumber", ob.RuntimeSerialNumber)) if ob.Geometry else int(ob.RuntimeSerialNumber)
+                geom_crc = int(ob.Geometry.DataCRC(0)) if (ob.Geometry and hasattr(ob.Geometry, "DataCRC")) else 0
+
                 obj_manifest[rhid] = {
                     "layer": sc.doc.Layers[ob.Attributes.LayerIndex].FullPath,
                     "visible": bool(ob.Attributes.Visible),
-                    "runtime_sn": int(ob.RuntimeSerialNumber)
+                    "mat_idx": int(ob.Attributes.MaterialIndex),
+                    "comp_sn": comp_sn,
+                    "geom_crc": geom_crc,
+                    "bbox": bbox_vals
                 }
             except Exception:
                 pass
@@ -103,7 +109,6 @@ def FastLinkExport():
             "doc_name": doc_basename,
             "export_format": "3DM",
             "active_filepath": export_full_path,
-            "fallback_filepath": fallback_path,
             "is_delta": False,
             "export_curves": False,
             "object_count": obj_count,

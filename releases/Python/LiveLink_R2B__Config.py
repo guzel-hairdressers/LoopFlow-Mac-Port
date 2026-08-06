@@ -113,14 +113,23 @@ def save_r2b_sync_metadata(meta_dict):
         added = list(curr_keys - prev_keys)
         removed = list(prev_keys - curr_keys)
         
-        # Check ONLY runtime_sn (geometry serial number) for geometry modifications!
-        modified_geom = [
-            k for k in (curr_keys & prev_keys) 
-            if curr_objs[k].get("runtime_sn") != prev_objs[k].get("runtime_sn")
-        ]
-        
+        # Detect geometry modifications (transform/bbox, component SN, material, or layer moves)
+        modified_geom = []
+        for k in (curr_keys & prev_keys):
+            c_info = curr_objs[k]
+            p_info = prev_objs[k]
+
+            # Check if bbox (position/gumball move), geom_crc (internal vertex edit), comp_sn, layer, or material changed
+            if (c_info.get("bbox") != p_info.get("bbox") or
+                c_info.get("geom_crc") != p_info.get("geom_crc") or
+                c_info.get("comp_sn") != p_info.get("comp_sn") or
+                c_info.get("runtime_sn") != p_info.get("runtime_sn") or
+                c_info.get("layer") != p_info.get("layer") or
+                c_info.get("mat_idx") != p_info.get("mat_idx")):
+                modified_geom.append(k)
+
         geom_changed = bool(added or removed or modified_geom)
-        modified = [k for k in (curr_keys & prev_keys) if curr_objs[k] != prev_objs[k]]
+        modified = modified_geom
     else:
         added, removed, modified = [], [], []
         geom_changed = True
