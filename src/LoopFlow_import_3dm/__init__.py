@@ -508,9 +508,10 @@ class RHINO_PT_QuickUpdate(bpy.types.Panel):
         layout.label(text="Model Sync", icon='MESH_DATA')
         box_model = layout.box()
 
-        col_upd = box_model.column()
-        col_upd.scale_y = 1.4
+        col_upd = box_model.column(align=True)
+        col_upd.scale_y = 1.3
         col_upd.operator("import_3dm.quick_sync", text="Model Sync", icon='FILE_REFRESH').update_mats = False
+        col_upd.operator("import_3dm.quick_sync", text="Import Model", icon='IMPORT').update_mats = True
 
         row_opts = box_model.row(align=True)
         row_opts.prop(scene, "rhino_weld_meshes", text="Weld Meshes")
