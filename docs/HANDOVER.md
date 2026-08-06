@@ -48,7 +48,7 @@ LoopFlow-Mac-Port/
   - `Merge (Keep Existing)`: Remaps objects to existing Blender materials, keeping existing material settings intact.
   - `Merge (Overwrite Existing)`: Remaps materials and updates existing Blender shader node inputs with newly imported material properties.
   - `Keep Unique`: Keeps imported materials unique (`Material.001`, `Material.002`) without merging.
-- **SubD Subdivision Level Control (`0` to `5`)**: Imports SubD objects with a single `Subdivision` modifier. Set default to **3** subdivisions for smooth viewport and render geometry. SubD mesh is created directly from Rhino's unsubdivided base control net.
+- **SubD Subdivision Level Control (`0` to `5`)**: Imports SubD objects as pure 1:1 control nets (`r3d.Mesh.CreateFromSubDControlNet(og, False)`). Verified against `subd_test.3dm` to yield exact 20 faces and 18 vertices (no baked rigid texture-coord quad splitting). Applies a single `Subdivision` modifier default to **3** subdivisions for smooth Catmull-Clark viewport and render geometry.
 
 ---
 

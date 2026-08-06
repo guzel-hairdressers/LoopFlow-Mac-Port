@@ -136,7 +136,7 @@ def import_render_mesh(context, ob, name, scale, options):
     elif og.ObjectType == r3d.ObjectType.Mesh:
         msh = [og]
     elif is_subd:
-        msh = [r3d.Mesh.CreateFromSubDControlNet(og, True)]
+        msh = [r3d.Mesh.CreateFromSubDControlNet(og, False)]
     elif og.ObjectType == r3d.ObjectType.Brep:
         msh = [og.Faces[f].GetMesh(r3d.MeshType.Any) for f in range(len(og.Faces)) if type(og.Faces[f]) != list]
     elif og.ObjectType == r3d.ObjectType.Surface:
