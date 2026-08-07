@@ -181,8 +181,10 @@ def handle_materials(context, model : r3d.File3dm, materials, update):
                 m = None
         
         mat_guid = m.Id if m else (mat.Id if hasattr(mat, "Id") else uuid.uuid1())
-        tags = utils.create_tag_dict(mat_guid, matname)
-        blmat = utils.get_or_create_iddata(context.blend_data.materials, tags, None)
+        blmat = context.blend_data.materials.get(matname)
+        if not blmat:
+            tags = utils.create_tag_dict(mat_guid, matname)
+            blmat = utils.get_or_create_iddata(context.blend_data.materials, tags, None)
         
         is_harvested = blmat.get("rh_harvested", False)
         if update or not is_harvested:

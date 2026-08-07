@@ -11,18 +11,13 @@ def tag_data(idblock : bpy.types.ID, tag_dict: Dict[str, Any]) -> None:
     """
     Write Rhino source data into Blender object custom properties.
     """
-    idblock['rhid'] = str(tag_dict.get('rhid', None))
-    idblock['rhname'] = tag_dict.get('rhname', None)
-    idblock['rhmatid'] = str(tag_dict.get('rhmatid', None))
-    idblock['rhparentid'] = str(tag_dict.get('rhparentid', None))
-    idblock['rhidef'] = tag_dict.get('rhidef', False)
-    idblock['rhmat_from_object'] = tag_dict.get('rhmat_from_object', True)
+    if 'rhid' in tag_dict and tag_dict['rhid'] is not None:
+        idblock['rhid'] = str(tag_dict['rhid'])
+    if 'rhname' in tag_dict and tag_dict['rhname']:
+        idblock['rhname'] = tag_dict['rhname']
 
 def create_tag_dict(guid, name, matid=None, parentid=None, is_idef=False, mat_from_object=True):
-    return {
-        'rhid': guid, 'rhname': name, 'rhmatid': matid,
-        'rhparentid': parentid, 'rhidef': is_idef, 'rhmat_from_object': mat_from_object
-    }
+    return {'rhid': guid, 'rhname': name}
 
 all_dict = dict()
 
@@ -38,23 +33,22 @@ def reset_all_dict(context):
     Run cleanup and reinitialise the cache dictionary.
     """
     clear_all_dict()
-    bases = [
-        context.blend_data.objects, context.blend_data.cameras,
-        context.blend_data.lights, context.blend_data.meshes,
-        context.blend_data.materials, context.blend_data.collections,
-        context.blend_data.curves
-    ]
-    for base in bases:
-        # Use the type name as key
-        t = repr(base).split(',')[1]
-        dct = all_dict.setdefault(t, dict())
-        for item in base:
-            rhid = item.get('rhid', None)
-            if rhid:
-                dct[rhid] = item
+    all_dict["objects"] = {item['rhid']: item for item in context.blend_data.objects if 'rhid' in item}
+    all_dict["meshes"] = {item['rhid']: item for item in context.blend_data.meshes if 'rhid' in item}
+    all_dict["materials"] = {item['rhid']: item for item in context.blend_data.materials if 'rhid' in item}
+    all_dict["collections"] = {item['rhid']: item for item in context.blend_data.collections if 'rhid' in item}
 
 def get_dict_for_base(base):
     global all_dict
+    bd = bpy.context.blend_data
+    if base == bd.objects:
+        return all_dict.setdefault("objects", dict())
+    elif base == bd.meshes:
+        return all_dict.setdefault("meshes", dict())
+    elif base == bd.materials:
+        return all_dict.setdefault("materials", dict())
+    elif base == bd.collections:
+        return all_dict.setdefault("collections", dict())
     try:
         t = repr(base).split(',')[1].strip()
     except Exception:
@@ -65,42 +59,59 @@ def get_or_create_iddata(base : bpy.types.bpy_prop_collection, tag_dict: Dict[st
     """
     Get or create a data block and sync its display name.
     """
-    founditem : bpy.types.ID = None
     guid = tag_dict.get('rhid', None)
     name = tag_dict.get('rhname', None)
     dct = get_dict_for_base(base)
 
-    if guid is not None:
-        strguid = str(guid)
-        if strguid in dct:
-            founditem = dct[strguid]
+    strguid = str(guid) if guid is not None else None
 
-    if founditem:
-        theitem = founditem
-        # Sync display name
+    if strguid and strguid in dct:
+        theitem = dct[strguid]
         if name and theitem.name != name:
             theitem.name = name
-        theitem['rhname'] = name
-        
-        if obdata and type(theitem) != type(obdata):
+            theitem['rhname'] = name
+        if obdata and hasattr(theitem, "data") and type(theitem.data) != type(obdata):
             theitem.data = obdata
     else:
         # Create new data block
-        if obdata:
-            theitem = base.new(name=name, object_data=obdata)
+        if not name and guid:
+            name = f"LF_{guid}"
+        dname = name if name else "LF_Obj"
+        if base == bpy.context.blend_data.objects:
+            theitem = base.new(name=dname, object_data=obdata)
         else:
-            theitem = base.new(name=name)
+            theitem = base.new(name=dname)
         
-        if guid is not None:
-            dct[str(guid)] = theitem
+        if strguid:
+            dct[strguid] = theitem
         tag_data(theitem, tag_dict)
         
     return theitem
 
-def matrix_from_xform(xform : r3d.Transform):
-     return Matrix(
+def compute_mesh_signature_from_precomputed(nv, nf, bb_min_x, bb_min_y, bb_min_z,
+                                              bb_max_x, bb_max_y, bb_max_z,
+                                              n_tris, n_quads, n_ngons):
+    """Build position-independent geometry signature from pre-computed bbox/face counts."""
+    pre_key = (nv, nf)
+    r = 3
+    dx = round(bb_max_x - bb_min_x, r)
+    dy = round(bb_max_y - bb_min_y, r)
+    dz = round(bb_max_z - bb_min_z, r)
+    full_hash = hash((nv, nf, dx, dy, dz, n_tris, n_quads, n_ngons))
+    return (pre_key, full_hash)
+
+
+def matrix_from_xform(xform : r3d.Transform, scale : float = 1.0):
+    if scale == 1.0:
+        return Matrix(
             ((xform.M00, xform.M01, xform.M02, xform.M03),
-            (xform.M10, xform.M11, xform.M12, xform.M13),
-            (xform.M20, xform.M21, xform.M22, xform.M23),
-            (xform.M30, xform.M31, xform.M32, xform.M33))
-     )
+             (xform.M10, xform.M11, xform.M12, xform.M13),
+             (xform.M20, xform.M21, xform.M22, xform.M23),
+             (xform.M30, xform.M31, xform.M32, xform.M33))
+        )
+    return Matrix(
+        ((xform.M00, xform.M01, xform.M02, xform.M03 * scale),
+         (xform.M10, xform.M11, xform.M12, xform.M13 * scale),
+         (xform.M20, xform.M21, xform.M22, xform.M23 * scale),
+         (xform.M30, xform.M31, xform.M32, xform.M33))
+    )

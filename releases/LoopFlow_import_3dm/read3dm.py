@@ -141,6 +141,16 @@ def create_or_get_top_layer(context, filepath, is_update=False, import_mode='SYN
     return toplayer
 
 def read_3dm(context : bpy.types.Context, options : Dict[str, Any]) -> Set[str]:
+    import LoopFlow_import_3dm as main_mod
+    orig_sync = main_mod._is_syncing_layers
+    main_mod._is_syncing_layers = True
+
+    try:
+        return _read_3dm_internal(context, options)
+    finally:
+        main_mod._is_syncing_layers = orig_sync
+
+def _read_3dm_internal(context : bpy.types.Context, options : Dict[str, Any]) -> Set[str]:
     filepath : str = options.get("filepath", "")
     data_dir = os.path.dirname(filepath) if filepath else os.path.expanduser("~/Desktop")
     
@@ -397,9 +407,8 @@ def read_3dm(context : bpy.types.Context, options : Dict[str, Any]) -> Set[str]:
         print(f"LoopFlow Error: Could not read 3dm file: {filepath}")
         return {'CANCELLED'}
 
-    profiler.step(f"3. Read 3DM File from Disk ({os.path.getsize(filepath) / (1024*1024):.1f} MB)")
-
     options["rh_model"] = model
+    options["idef_map"] = {idef.Id: f"[Block] {idef.Name}" if idef.Name else f"Block {idef.Id}" for idef in model.InstanceDefinitions} if hasattr(model, "InstanceDefinitions") else {}
     toplayer = create_or_get_top_layer(context, filepath, is_update=is_update, import_mode=options.get("import_mode", "SYNC"))
     profiler.step("4. Create and Teardown Scene Collections")
 
@@ -419,11 +428,33 @@ def read_3dm(context : bpy.types.Context, options : Dict[str, Any]) -> Set[str]:
 
     link_options = options.copy()
     link_options["update_materials"] = True 
+    link_options["defer_link"] = True
+
+    mat_link_pref = options.get("link_materials_to", "PREFERENCES")
+    if mat_link_pref == "PREFERENCES":
+        mat_link_pref = context.preferences.edit.material_link
+        if mat_link_pref == 'OBDATA':
+            mat_link_pref = 'DATA'
+    link_options["link_materials_to_resolved"] = mat_link_pref
 
     import_instances = options.get("import_instances", True)
     if import_instances and hasattr(model, "InstanceDefinitions") and len(model.InstanceDefinitions) > 0:
         converters.handle_instance_definitions(context, model, toplayer, "Instance Definitions")
         profiler.step("8. Instance Definitions Setup")
+
+    # Pre-map block template object GUIDs -> their [Block] collections (O(1) lookup)
+    idef_obj_map = {}
+    if import_instances and hasattr(model, "InstanceDefinitions"):
+        for idef in model.InstanceDefinitions:
+            block_name = f"[Block] {idef.Name}" if idef.Name else f"Block {idef.Id}"
+            blk_col = context.blend_data.collections.get(block_name)
+            if blk_col:
+                try:
+                    for guid in idef.GetObjectIds():
+                        idef_obj_map[str(guid)] = blk_col
+                except Exception:
+                    pass
+    options["idef_obj_map"] = idef_obj_map
 
     import_curves = options.get("import_curves", True)
     hidden_objects = []
@@ -431,6 +462,8 @@ def read_3dm(context : bpy.types.Context, options : Dict[str, Any]) -> Set[str]:
     total_objs = len(model.Objects)
     log_chunk = max(500, total_objs // 10) if total_objs > 0 else 500
     converted_vis_count = 0
+
+    pending_collection_links = {} # collection -> list of objects
 
     for idx, ob in enumerate(model.Objects):
         og = ob.Geometry
@@ -448,8 +481,17 @@ def read_3dm(context : bpy.types.Context, options : Dict[str, Any]) -> Set[str]:
             pass
 
         t = converters.convert_object(context, ob, model, layerids, materials, scale, link_options)
+        if t:
+            oa = ob.Attributes
+            is_idef = oa.IsInstanceDefinitionObject if (oa and hasattr(oa, "IsInstanceDefinitionObject")) else False
+            if is_idef:
+                target_col = idef_obj_map.get(str(oa.Id), layerids.get(oa.LayerIndex, context.scene.collection))
+            else:
+                target_col = layerids.get(oa.LayerIndex, context.scene.collection)
+            pending_collection_links.setdefault(target_col, []).append(t)
+
         converted_vis_count += 1
-        
+
         if (idx + 1) % log_chunk == 0 or (idx + 1) == total_objs:
             profiler.step(f"9. Convert Visible Objects Batch ({idx + 1}/{total_objs})")
 
@@ -459,13 +501,30 @@ def read_3dm(context : bpy.types.Context, options : Dict[str, Any]) -> Set[str]:
     for h_idx, ob in enumerate(hidden_objects):
         try:
             t = converters.convert_object(context, ob, model, layerids, materials, scale, link_options)
-            if t and hasattr(t, "hide_viewport"):
-                t.hide_viewport = True
-                t.hide_render = True
+            if t:
+                oa = ob.Attributes
+                is_idef = oa.IsInstanceDefinitionObject if (oa and hasattr(oa, "IsInstanceDefinitionObject")) else False
+                if is_idef:
+                    target_col = idef_obj_map.get(str(oa.Id), layerids.get(oa.LayerIndex, context.scene.collection))
+                else:
+                    target_col = layerids.get(oa.LayerIndex, context.scene.collection)
+                pending_collection_links.setdefault(target_col, []).append(t)
+                if hasattr(t, "hide_viewport"):
+                    t.hide_viewport = True
+                    t.hide_render = True
         except Exception:
             pass
 
     profiler.step(f"10. Convert Hidden Objects ({len(hidden_objects)} items)")
+
+    # Fast deferred bulk linking (defer_link=True guarantees no pre-existing links)
+    for layer, objs in pending_collection_links.items():
+        for bo in objs:
+            try:
+                layer.objects.link(bo)
+            except Exception:
+                pass
+    profiler.step("10b. Deferred Bulk Collection Linking")
 
     if import_instances and hasattr(model, "InstanceDefinitions") and len(model.InstanceDefinitions) > 0:
         try:

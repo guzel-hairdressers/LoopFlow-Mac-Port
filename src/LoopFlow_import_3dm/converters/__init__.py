@@ -80,21 +80,37 @@ def convert_object(
     collection given by layer
     """
 
-    name = ob.Attributes.Name if ob.Attributes.Name else str(ob.Attributes.Id)
+    name = ob.Attributes.Name if ob.Attributes.Name else f"LF_{ob.Attributes.Id}"
     layer = layerids.get(ob.Attributes.LayerIndex, context.scene.collection)
+
+    layer_info_cache = options.get("layer_info_cache", None)
+    if layer_info_cache is None and model and hasattr(model, "Layers"):
+        layer_info_cache = {}
+        for l_idx in range(len(model.Layers)):
+            l = model.Layers[l_idx]
+            l_mat_idx = -1
+            if hasattr(l, "RenderMaterialInstanceId") and str(l.RenderMaterialInstanceId) in materials:
+                l_mat_idx = str(l.RenderMaterialInstanceId)
+            elif hasattr(l, "RenderMaterialIndex"):
+                l_mat_idx = l.RenderMaterialIndex
+            elif hasattr(l, "MaterialIndex"):
+                l_mat_idx = l.MaterialIndex
+            
+            l_color = (200, 200, 200, 255)
+            try:
+                l_color = l.Color
+            except Exception:
+                pass
+            layer_info_cache[l_idx] = (l_mat_idx, l_color)
+        options["layer_info_cache"] = layer_info_cache
+
+    layer_idx = ob.Attributes.LayerIndex
+    l_mat_idx, l_color = layer_info_cache.get(layer_idx, (-1, (200, 200, 200, 255))) if layer_info_cache else (-1, (200, 200, 200, 255))
     
     # Resolve material index/guid from object or layer
     mat_idx = ob.Attributes.MaterialIndex
-    if (ob.Attributes.MaterialSource == r3d.ObjectMaterialSource.MaterialFromLayer or mat_idx < 0) and model and 0 <= ob.Attributes.LayerIndex < len(model.Layers):
-        l = model.Layers[ob.Attributes.LayerIndex]
-        if hasattr(l, "RenderMaterialInstanceId") and str(l.RenderMaterialInstanceId) in materials:
-            mat_idx = str(l.RenderMaterialInstanceId)
-        elif hasattr(l, "RenderMaterialIndex"):
-            mat_idx = l.RenderMaterialIndex
-        elif hasattr(l, "MaterialIndex"):
-            mat_idx = l.MaterialIndex
-        else:
-            mat_idx = -1
+    if ob.Attributes.MaterialSource == r3d.ObjectMaterialSource.MaterialFromLayer or mat_idx < 0:
+        mat_idx = l_mat_idx
 
     rhinomat = materials.get(mat_idx, materials.get(str(mat_idx), materials.get(-1)))
 
@@ -102,8 +118,8 @@ def convert_object(
     try:
         if ob.Attributes.ColorSource == r3d.ObjectColorSource.ColorFromObject:
             view_color = ob.Attributes.ObjectColor
-        elif model and 0 <= ob.Attributes.LayerIndex < len(model.Layers):
-            view_color = model.Layers[ob.Attributes.LayerIndex].Color
+        else:
+            view_color = l_color
     except Exception:
         pass
 
@@ -119,23 +135,30 @@ def convert_object(
     text_object = None
     if ob.Geometry.ObjectType in RHINO_TYPE_TO_IMPORT:
         data = RHINO_TYPE_TO_IMPORT[ob.Geometry.ObjectType](context, ob, name, scale, options)
-        if ob.Geometry.ObjectType == r3d.ObjectType.Annotation:
-            text_curve = data[1]
-            data = data[0]
+        if ob.Geometry.ObjectType == r3d.ObjectType.Annotation and data:
+            if isinstance(data, (tuple, list)):
+                text_curve = data[1] if len(data) > 1 else None
+                data = data[0] if len(data) > 0 else None
 
     mat_from_object = ob.Attributes.MaterialSource == r3d.ObjectMaterialSource.MaterialFromObject
 
-    tags = utils.create_tag_dict(ob.Attributes.Id, ob.Attributes.Name)
+    obj_name = ob.Attributes.Name if ob.Attributes.Name else f"LF_{ob.Attributes.Id}"
+    tags = utils.create_tag_dict(ob.Attributes.Id, obj_name)
     if data is not None:
-        data.materials.clear()
-        data.materials.append(rhinomat)
+        shared_mesh_names = options.get("_shared_mesh_names", set())
+        mesh_is_shared = data.name in shared_mesh_names
+
+        if not mesh_is_shared:
+            if len(data.materials) == 0:
+                data.materials.append(rhinomat)
+            elif data.materials[0] != rhinomat:
+                data.materials[0] = rhinomat
+
         blender_object = utils.get_or_create_iddata(context.blend_data.objects, tags, data)
-        if link_materials_to == "PREFERENCES":
-            link_materials_to = bpy.context.preferences.edit.material_link
-            if link_materials_to == 'OBDATA':
-                link_materials_to = 'DATA'
+        mat_link_target = 'OBJECT' if mesh_is_shared else options.get("link_materials_to_resolved", "DATA")
         for slot in blender_object.material_slots:
-            slot.link = link_materials_to
+            if slot.link != mat_link_target:
+                slot.link = mat_link_target
 
         if text_curve:
             text_tags = utils.create_tag_dict(uuid.uuid1(), f"TXT{ob.Attributes.Name}")
@@ -147,14 +170,16 @@ def convert_object(
             texmatrix = text_curve[1]
             text_object.matrix_world = texmatrix
     else:
-        blender_object = context.blend_data.objects.new(name+"_Instance", None)
-        utils.tag_data(blender_object, tags)
+        blender_object = utils.get_or_create_iddata(context.blend_data.objects, tags, None)
 
-    blender_object.color = [x/255. for x in view_color]
+    col_tuple = (view_color[0]/255.0, view_color[1]/255.0, view_color[2]/255.0, view_color[3]/255.0)
+    blender_object.color = col_tuple
 
     # Ensure viewport restriction (hide_viewport) and render restriction (hide_render) are FALSE so objects are NEVER disabled.
-    blender_object.hide_viewport = False
-    blender_object.hide_render = False
+    if blender_object.hide_viewport:
+        blender_object.hide_viewport = False
+    if blender_object.hide_render:
+        blender_object.hide_render = False
 
     # 1. Apply single Subdivision Surface modifier based on user UI slider (default 3)
     if ob.Geometry.ObjectType == r3d.ObjectType.SubD and blender_object and type(blender_object) == bpy.types.Object:
@@ -191,17 +216,30 @@ def convert_object(
             if len(blender_object.material_slots) == 0:
                 if hasattr(blender_object, "data") and hasattr(blender_object.data, "materials"):
                     blender_object.data.materials.append(rhinomat)
-            elif blender_object.material_slots[0].material is None or update_materials:
-                blender_object.material_slots[0].link = 'OBJECT'
-                blender_object.material_slots[0].material = rhinomat
+            else:
+                slot = blender_object.material_slots[0]
+                mat_link_target = options.get("link_materials_to_resolved", "DATA")
+                if slot.link != mat_link_target:
+                    slot.link = mat_link_target
+                if slot.material != rhinomat:
+                    slot.material = rhinomat
 
-    # Instance definition objects are linked within their definition collections
-    if not ob.Attributes.IsInstanceDefinitionObject:
-        try:
-            layer.objects.link(blender_object)
-            if text_object:
-                layer.objects.link(text_object)
-        except Exception:
-            pass
+    defer_link = options.get("defer_link", False)
+    if not defer_link:
+        oa = ob.Attributes
+        is_idef_obj = oa.IsInstanceDefinitionObject if (oa and hasattr(oa, "IsInstanceDefinitionObject")) else False
+        if not is_idef_obj:
+            try:
+                if layer and blender_object.name not in layer.objects:
+                    layer.objects.link(blender_object)
+            except Exception:
+                pass
+
+        if text_object and not is_idef_obj:
+            try:
+                if layer and text_object.name not in layer.objects:
+                    layer.objects.link(text_object)
+            except Exception:
+                pass
 
     return blender_object

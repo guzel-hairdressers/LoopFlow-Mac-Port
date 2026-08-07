@@ -138,66 +138,149 @@ def import_render_mesh(context, ob, name, scale, options):
     elif is_subd:
         msh = [r3d.Mesh.CreateFromSubDControlNet(og, False)]
     elif og.ObjectType == r3d.ObjectType.Brep:
-        msh = [og.Faces[f].GetMesh(r3d.MeshType.Any) for f in range(len(og.Faces)) if type(og.Faces[f]) != list]
+        combined = r3d.Mesh()
+        og_faces = og.Faces
+        for f in range(len(og_faces)):
+            try:
+                fm = og_faces[f].GetMesh(r3d.MeshType.Any)
+                if fm:
+                    combined.Append(fm)
+            except Exception:
+                pass
+        msh = [combined] if len(combined.Vertices) > 0 else []
     elif og.ObjectType == r3d.ObjectType.Surface:
         try:
             brep = og.ToBrep()
             if brep and hasattr(brep, "Faces"):
-                msh = [brep.Faces[f].GetMesh(r3d.MeshType.Any) for f in range(len(brep.Faces)) if type(brep.Faces[f]) != list]
-            else:
-                msh = [og.GetMesh(r3d.MeshType.Any)]
+                combined = r3d.Mesh()
+                b_faces = brep.Faces
+                for f in range(len(b_faces)):
+                    fm = b_faces[f].GetMesh(r3d.MeshType.Any)
+                    if fm:
+                        combined.Append(fm)
+                msh = [combined] if len(combined.Vertices) > 0 else []
         except Exception:
-            msh = [og.GetMesh(r3d.MeshType.Any)]
+            msh = []
     
     fidx = 0
     faces = []
     vertices = []
     coords = []
     vcls = []
+    n_tris = 0
+    n_quads = 0
 
-    # Concatenate all faces and vertices
     for m in msh:
         if not m:
             continue
 
-        for f in range(len(m.Faces)):
-            face = list(m.Faces[f])
-            if len(face) == 4 and face[-1] == face[-2]:
-                face = face[:3]
-            faces.append([idx + fidx for idx in face])
+        m_faces = m.Faces
+        m_verts = m.Vertices
+        m_tc = m.TextureCoordinates
+        m_vc = m.VertexColors
 
-        fidx += len(m.Vertices)
-        vertices.extend([(m.Vertices[v].X * scale, m.Vertices[v].Y * scale, m.Vertices[v].Z * scale) for v in range(len(m.Vertices))])
-        coords.extend([(m.TextureCoordinates[v].X, m.TextureCoordinates[v].Y) for v in range(len(m.TextureCoordinates))])
-        vcls.extend((m.VertexColors[v][0], m.VertexColors[v][1], m.VertexColors[v][2], m.VertexColors[v][3]) for v in range(len(m.VertexColors)))
+        if fidx:
+            for face in m_faces:
+                f0, f1, f2, f3 = face[0], face[1], face[2], face[3]
+                if f3 == f2:
+                    faces.append((f0 + fidx, f1 + fidx, f2 + fidx))
+                    n_tris += 1
+                else:
+                    faces.append((f0 + fidx, f1 + fidx, f2 + fidx, f3 + fidx))
+                    n_quads += 1
+        else:
+            for face in m_faces:
+                f0, f1, f2, f3 = face[0], face[1], face[2], face[3]
+                if f3 == f2:
+                    faces.append((f0, f1, f2))
+                    n_tris += 1
+                else:
+                    faces.append((f0, f1, f2, f3))
+                    n_quads += 1
 
-    tags = utils.create_tag_dict(oa.Id, oa.Name)
+        fidx += len(m_verts)
+        if scale == 1.0:
+            vertices.extend([(v.X, v.Y, v.Z) for v in m_verts])
+        else:
+            vertices.extend([(v.X * scale, v.Y * scale, v.Z * scale) for v in m_verts])
+
+        if len(m_tc) > 0:
+            coords.extend([(uv.X, uv.Y) for uv in m_tc])
+        if len(m_vc) > 0:
+            for c in m_vc:
+                vcls.extend((c[0] / 255.0, c[1] / 255.0, c[2] / 255.0, c[3] / 255.0))
+
+    # Compute bbox from vertices for dedup signature (one fast Python pass)
+    nv = len(vertices)
+    nf = len(faces)
+    bb_min_x = bb_min_y = bb_min_z = float('inf')
+    bb_max_x = bb_max_y = bb_max_z = float('-inf')
+    for x, y, z in vertices:
+        if x < bb_min_x: bb_min_x = x
+        elif x > bb_max_x: bb_max_x = x
+        if y < bb_min_y: bb_min_y = y
+        elif y > bb_max_y: bb_max_y = y
+        if z < bb_min_z: bb_min_z = z
+        elif z > bb_max_z: bb_max_z = z
+
+    # --- Mesh Deduplication ---
+    nv = len(vertices)
+    nf = len(faces)
+    sig = utils.compute_mesh_signature_from_precomputed(
+        nv, nf, bb_min_x, bb_min_y, bb_min_z,
+        bb_max_x, bb_max_y, bb_max_z,
+        n_tris, n_quads, nf - n_tris - n_quads
+    ) if (nv > 0 and nf > 0) else None
+    pre_key, full_hash = sig if sig else (None, None)
+
+    mesh_cache = options.get("mesh_sig_cache")
+    if mesh_cache is None:
+        mesh_cache = {}
+        options["mesh_sig_cache"] = mesh_cache
+
+    if pre_key is not None and pre_key in mesh_cache:
+        bucket = mesh_cache[pre_key]
+        if full_hash in bucket:
+            options.setdefault("_shared_mesh_names", set()).add(bucket[full_hash].name)
+            return bucket[full_hash]
+
+    mesh_name = oa.Name if oa.Name else f"LFM_{oa.Id}"
+    tags = utils.create_tag_dict(oa.Id, mesh_name)
     mesh = utils.get_or_create_iddata(context.blend_data.meshes, tags, None)
     mesh.clear_geometry()
     mesh.from_pydata(vertices, [], faces, shade_flat=False)
 
-    if mesh.loops and len(coords) == len(vertices):
+    if pre_key is not None and full_hash is not None:
+        mesh_cache.setdefault(pre_key, {})[full_hash] = mesh
+
+    # UV: foreach_set with foreach_get for fast C-level transfer
+    if mesh.loops and len(coords) == nv:
         if "RhinoUVMap" not in mesh.uv_layers:
             mesh.uv_layers.new(name="RhinoUVMap")
         uvl = mesh.uv_layers["RhinoUVMap"].data
-        if len(uvl) == len(mesh.loops):
-            for l in mesh.loops:
-                uvl[l.index].uv = coords[l.vertex_index]
-            mesh.validate()
-            mesh.update()
+        loop_count = len(mesh.loops)
+        if len(uvl) == loop_count:
+            vert_indices = [0] * loop_count
+            mesh.loops.foreach_get("vertex_index", vert_indices)
+            uv_flat = [0.0] * (loop_count * 2)
+            for i in range(loop_count):
+                c = coords[vert_indices[i]]
+                uv_flat[i * 2] = c[0]
+                uv_flat[i * 2 + 1] = c[1]
+            uvl.foreach_set("uv", uv_flat)
         else:
             mesh.uv_layers.remove(mesh.uv_layers["RhinoUVMap"])
 
-    if len(vcls) == len(vertices):
+    # Vertex colors: pre-normalized during extraction, single foreach_set
+    if len(vcls) == nv * 4:
         mesh.attributes.new("RhinoColor", "FLOAT_COLOR", "POINT")
         rcl = mesh.attributes["RhinoColor"]
-        for i in range(len(vcls)):
-            vcl = vcls[i]
-            rcl.data[i].color = (vcl[0] / 255.0, vcl[1] / 255.0, vcl[2] / 255.0, vcl[3] / 255.0)
-        mesh.validate()
-        mesh.update()
+        rcl.data.foreach_set("color", vcls)
 
-    if needs_welding:
+    is_single_mesh = (len(msh) == 1 and (og.ObjectType == r3d.ObjectType.Mesh or og.ObjectType == r3d.ObjectType.Brep))
+    should_weld = is_subd or (len(msh) > 1 and not (og.ObjectType == r3d.ObjectType.Brep)) or (needs_welding and not is_single_mesh)
+
+    if should_weld:
         bm = bmesh.new()
         bm.from_mesh(mesh)
         bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=0.001)
