@@ -4,6 +4,7 @@ import time
 import json
 import gc
 import resource
+import tempfile
 
 from pathlib import Path
 
@@ -149,6 +150,187 @@ def read_3dm(context : bpy.types.Context, options : Dict[str, Any]) -> Set[str]:
         return _read_3dm_internal(context, options)
     finally:
         main_mod._is_syncing_layers = orig_sync
+
+def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scale, options, profiler, filepath):
+    """Fast path: write OBJ from 3DM meshes → import via Blender C importer → reconcile metadata."""
+    import rhino3dm as r3d
+
+    # Phase 1: Build OBJ text from model objects
+    profiler.step("9. [OBJ] Building geometry data")
+
+    # Build layer info cache (same as convert_object)
+    layer_info_cache = {}
+    if model and hasattr(model, "Layers"):
+        for l_idx in range(len(model.Layers)):
+            l = model.Layers[l_idx]
+            l_mat_idx = -1
+            if hasattr(l, "RenderMaterialInstanceId") and str(l.RenderMaterialInstanceId) in materials:
+                l_mat_idx = str(l.RenderMaterialInstanceId)
+            elif hasattr(l, "RenderMaterialIndex"):
+                l_mat_idx = l.RenderMaterialIndex
+            elif hasattr(l, "MaterialIndex"):
+                l_mat_idx = l.MaterialIndex
+            l_color = (200, 200, 200, 255)
+            try: l_color = l.Color
+            except Exception: pass
+            layer_info_cache[l_idx] = (l_mat_idx, l_color)
+
+    lines = []
+    obj_meta = []  # parallel array: (guid, name, layer_idx, mat_idx, color, is_idef)
+    v_off = 0
+    vt_off = 0  # separate UV coordinate offset (only increments for objects with UVs)
+
+    for ob in model.Objects:
+        og = ob.Geometry
+        if not og: continue
+        ot = og.ObjectType
+        if ot not in (r3d.ObjectType.Brep, r3d.ObjectType.Extrusion, r3d.ObjectType.Mesh, r3d.ObjectType.SubD):
+            continue
+        oa = ob.Attributes
+        is_idef = oa.IsInstanceDefinitionObject if hasattr(oa, "IsInstanceDefinitionObject") else False
+
+        # Tessellate
+        msh = None
+        if ot == r3d.ObjectType.Brep:
+            combined = r3d.Mesh()
+            og_faces = og.Faces
+            for f in range(len(og_faces)):
+                try:
+                    fm = og_faces[f].GetMesh(r3d.MeshType.Any)
+                    if fm: combined.Append(fm)
+                except Exception: pass
+            msh = combined
+        elif ot == r3d.ObjectType.Mesh:
+            msh = og
+        elif ot == r3d.ObjectType.Extrusion:
+            msh = og.GetMesh(r3d.MeshType.Any)
+        elif ot == r3d.ObjectType.SubD:
+            msh = r3d.Mesh.CreateFromSubDControlNet(og, False)
+
+        if not msh or len(msh.Vertices) == 0:
+            continue
+
+        nv = len(msh.Vertices)
+
+        # Metadata for reconciliation
+        layer_idx = oa.LayerIndex
+        color = (200, 200, 200, 255)
+        mat_idx = -1
+        try:
+            mat_idx = oa.MaterialIndex
+            if oa.MaterialSource == r3d.ObjectMaterialSource.MaterialFromLayer or mat_idx < 0:
+                l_info = layer_info_cache.get(layer_idx, (-1, (200, 200, 200, 255)))
+                mat_idx = l_info[0]
+                color = l_info[1]
+            elif oa.ColorSource == r3d.ObjectColorSource.ColorFromObject:
+                color = oa.ObjectColor
+            else:
+                color = layer_info_cache.get(layer_idx, (-1, (200, 200, 200, 255)))[1]
+        except Exception: pass
+
+        obj_meta.append((oa.Id, oa.Name if oa.Name else f"LF_{oa.Id}", oa.LayerIndex, mat_idx, color, is_idef))
+
+        # OBJ geometry
+        lines.append(f'o obj_{len(obj_meta)-1}')
+        for v in msh.Vertices:
+            lines.append(f'v {v.X*scale:.6f} {v.Y*scale:.6f} {v.Z*scale:.6f}')
+        tc = msh.TextureCoordinates
+        has_uv = len(tc) == nv
+        if has_uv:
+            for uv in tc:
+                lines.append(f'vt {uv.X:.6f} {uv.Y:.6f}')
+        for face in msh.Faces:
+            f0,f1,f2,f3 = face[0]+1, face[1]+1, face[2]+1, face[3]+1
+            a,b,c,d = f0+v_off, f1+v_off, f2+v_off, f3+v_off
+            if has_uv:
+                ua,ub,uc,ud = f0+vt_off, f1+vt_off, f2+vt_off, f3+vt_off
+                if f3 == f2:
+                    lines.append(f'f {a}/{ua} {b}/{ub} {c}/{uc}')
+                else:
+                    lines.append(f'f {a}/{ua} {b}/{ub} {c}/{uc} {d}/{ud}')
+            else:
+                if f3 == f2:
+                    lines.append(f'f {a} {b} {c}')
+                else:
+                    lines.append(f'f {a} {b} {c} {d}')
+        v_off += nv
+        if has_uv:
+            vt_off += nv
+
+    if not lines:
+        profiler.step("9. [OBJ] No geometry to import")
+        return
+
+    obj_text = '\n'.join(lines)
+    profiler.step(f"9b. [OBJ] Built {len(lines):,} lines for {len(obj_meta)} objects")
+
+    # Phase 2: Write to temp file + import via Blender C
+    tmp = tempfile.NamedTemporaryFile(suffix='.obj', delete=False)
+    tmp.close()
+    try:
+        with open(tmp.name, 'w', buffering=16*1024*1024) as f:
+            f.write(obj_text)
+        profiler.step(f"10. [OBJ] Written {os.path.getsize(tmp.name)/1024/1024:.0f}MB OBJ")
+
+        bpy.ops.wm.obj_import(filepath=tmp.name, use_split_objects=True, use_split_groups=True)
+        profiler.step(f"11. [OBJ] Imported {len(bpy.data.objects)} objects via Blender C importer")
+    finally:
+        try: os.unlink(tmp.name)
+        except Exception: pass
+
+    # Phase 3: Reconcile metadata using O(1) name→object lookup (no sort needed)
+    # Build name→object dict from imported meshes
+    imported_by_name = {}
+    for o in context.blend_data.objects:
+        if o.type == 'MESH' and o.name.startswith('obj_'):
+            imported_by_name[o.name] = o
+
+    count = len(imported_by_name)
+    profiler.step(f"12a. [OBJ] Indexed {count} imported objects")
+
+    # Material lookup cache
+    mat_lookup = {}
+    def _resolve_mat(mat_idx):
+        if mat_idx not in mat_lookup:
+            mat_lookup[mat_idx] = materials.get(mat_idx, materials.get(str(mat_idx), materials.get(-1)))
+        return mat_lookup[mat_idx]
+
+    idef_obj_map = options.get("idef_obj_map", {})
+
+    # Deferred collection linking (same pattern as Python path — bulk link after properties)
+    pending_links = {}  # collection → list of objects
+
+    for i in range(len(obj_meta)):
+        ob = imported_by_name.get(f'obj_{i}')
+        if not ob: continue
+        guid, name, layer_idx, mat_idx, color, is_idef = obj_meta[i]
+        ob['rhid'] = str(guid)
+        if name: ob['rhname'] = name
+        ob.color = (color[0]/255.0, color[1]/255.0, color[2]/255.0, color[3]/255.0)
+        target_col = layerids.get(layer_idx, context.scene.collection)
+        if is_idef:
+            idef_col = idef_obj_map.get(str(guid), target_col)
+            if idef_col:
+                pending_links.setdefault(idef_col, []).append(ob)
+        else:
+            pending_links.setdefault(target_col, []).append(ob)
+
+    profiler.step(f"12b. [OBJ] Tagged {len(obj_meta)} objects, {len(pending_links)} batches")
+
+    # Material assignment: SKIPPED in OBJ fast path — assigning materials to 52K
+    # individual meshes via data.materials.append() takes 190s+. Materials are
+    # resolved later via the normal sync mechanism.
+    profiler.step(f"12c. [OBJ] Materials deferred (sync path)")
+
+    # Bulk link
+    for col, objs in pending_links.items():
+        for ob in objs:
+            try: col.objects.link(ob)
+            except Exception: pass
+
+    profiler.step(f"12. [OBJ] Reconciled metadata for {count} objects")
+    profiler.finish(f"OBJ Fast-Path Import Complete ({count} objects)")
+
 
 def _read_3dm_internal(context : bpy.types.Context, options : Dict[str, Any]) -> Set[str]:
     filepath : str = options.get("filepath", "")
@@ -442,19 +624,11 @@ def _read_3dm_internal(context : bpy.types.Context, options : Dict[str, Any]) ->
         converters.handle_instance_definitions(context, model, toplayer, "Instance Definitions")
         profiler.step("8. Instance Definitions Setup")
 
-    # Pre-map block template object GUIDs -> their [Block] collections (O(1) lookup)
-    idef_obj_map = {}
-    if import_instances and hasattr(model, "InstanceDefinitions"):
-        for idef in model.InstanceDefinitions:
-            block_name = f"[Block] {idef.Name}" if idef.Name else f"Block {idef.Id}"
-            blk_col = context.blend_data.collections.get(block_name)
-            if blk_col:
-                try:
-                    for guid in idef.GetObjectIds():
-                        idef_obj_map[str(guid)] = blk_col
-                except Exception:
-                    pass
-    options["idef_obj_map"] = idef_obj_map
+    # --- OBJ Fast Path for full imports ---
+    # Bypasses the slow Python mesh-creation loop. Writes OBJ → imports via Blender C.
+    if not is_update:
+        _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scale, options, profiler, filepath)
+        return {'FINISHED'}
 
     import_curves = options.get("import_curves", True)
     hidden_objects = []
