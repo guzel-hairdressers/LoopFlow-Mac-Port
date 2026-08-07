@@ -175,21 +175,50 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
             except Exception: pass
             layer_info_cache[l_idx] = (l_mat_idx, l_color)
 
-    lines = []
+    # Build MTL material definitions (written alongside OBJ for C-speed material assignment)
+    mtl_lines = ['# LoopFlow MTL']
+    mat_names_written = set()
+    if materials:
+        for key, blmat in materials.items():
+            if isinstance(key, int) and key >= 0 and blmat.name not in mat_names_written:
+                mat_names_written.add(blmat.name)
+                dc = getattr(blmat, 'diffuse_color', (0.8, 0.8, 0.8, 1.0))
+                mtl_lines.append(f'\nnewmtl {blmat.name}')
+                mtl_lines.append(f'Kd {dc[0]:.4f} {dc[1]:.4f} {dc[2]:.4f}')
+
+    lines = ['# OBJ from LoopFlow']
     obj_meta = []  # parallel array: (guid, name, layer_idx, mat_idx, color, is_idef)
     v_off = 0
-    vt_off = 0  # separate UV coordinate offset (only increments for objects with UVs)
+    vt_off = 0
+    last_mat_name = None
+    # Collect InstanceDefinition template objects — these go to [Block] collections, not OBJ
+    idef_objects = []
+    # Collect InstanceReference objects — these become empties, not OBJ meshes
+    iref_objects = []
 
     for ob in model.Objects:
         og = ob.Geometry
         if not og: continue
         ot = og.ObjectType
-        if ot not in (r3d.ObjectType.Brep, r3d.ObjectType.Extrusion, r3d.ObjectType.Mesh, r3d.ObjectType.SubD):
-            continue
         oa = ob.Attributes
         is_idef = oa.IsInstanceDefinitionObject if hasattr(oa, "IsInstanceDefinitionObject") else False
 
-        # Tessellate
+        # InstanceReferences: skip OBJ, handle as empties after import
+        if ot == r3d.ObjectType.InstanceReference:
+            iref_objects.append(ob)
+            continue
+
+        # Block template objects: skip OBJ, handle via Python path into [Block] collections
+        if is_idef:
+            if ot in (r3d.ObjectType.Brep, r3d.ObjectType.Extrusion, r3d.ObjectType.Mesh, r3d.ObjectType.SubD):
+                idef_objects.append(ob)
+            continue
+
+        # Curves and other non-mesh types: skip
+        if ot not in (r3d.ObjectType.Brep, r3d.ObjectType.Extrusion, r3d.ObjectType.Mesh, r3d.ObjectType.SubD):
+            continue
+
+        # Tessellate visible (non-idef) mesh objects for OBJ
         msh = None
         if ot == r3d.ObjectType.Brep:
             combined = r3d.Mesh()
@@ -211,8 +240,6 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
             continue
 
         nv = len(msh.Vertices)
-
-        # Metadata for reconciliation
         layer_idx = oa.LayerIndex
         color = (200, 200, 200, 255)
         mat_idx = -1
@@ -228,10 +255,16 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
                 color = layer_info_cache.get(layer_idx, (-1, (200, 200, 200, 255)))[1]
         except Exception: pass
 
-        obj_meta.append((oa.Id, oa.Name if oa.Name else f"LF_{oa.Id}", oa.LayerIndex, mat_idx, color, is_idef))
-
-        # OBJ geometry
-        lines.append(f'o obj_{len(obj_meta)-1}')
+        obj_meta.append((oa.Id, oa.Name if oa.Name else f"LF_{oa.Id}", oa.LayerIndex, mat_idx, color, False))
+        idx = len(obj_meta) - 1
+        lines.append(f'o obj_{idx}')
+        mat_name = None
+        if mat_idx >= 0:
+            blmat = materials.get(mat_idx, materials.get(str(mat_idx)))
+            if blmat: mat_name = blmat.name
+        if mat_name != last_mat_name:
+            if mat_name: lines.append(f'usemtl {mat_name}')
+            last_mat_name = mat_name
         for v in msh.Vertices:
             lines.append(f'v {v.X*scale:.6f} {v.Y*scale:.6f} {v.Z*scale:.6f}')
         tc = msh.TextureCoordinates
@@ -254,8 +287,38 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
                 else:
                     lines.append(f'f {a} {b} {c} {d}')
         v_off += nv
-        if has_uv:
-            vt_off += nv
+        if has_uv: vt_off += nv
+
+    profiler.step(f"9c. [OBJ] Skipped {len(idef_objects)} idef templates, {len(iref_objects)} irefs")
+
+    # --- Create instance empties NOW while Blender namemap is small ---
+    # (After 52K OBJ objects exist, bpy.data.objects.new() slows from 0.015ms→5ms each)
+    iref_pending = {}  # collection → list of empties
+    iref_count = 0
+    if iref_objects:
+        idef_map = options.get("idef_map", {})
+        tag_cache = {}
+        for ob in iref_objects:
+            try:
+                parent_id = ob.Geometry.ParentIdefId
+                if parent_id not in tag_cache:
+                    block_name = idef_map.get(parent_id, f"Block {parent_id}")
+                    col_tags = converters.utils.create_tag_dict(parent_id, block_name, None, None, True)
+                    idef_col = converters.utils.get_or_create_iddata(context.blend_data.collections, col_tags, None)
+                    tag_cache[parent_id] = idef_col
+                idef_col = tag_cache[parent_id]
+                name = ob.Attributes.Name if ob.Attributes.Name else f"LF_{ob.Attributes.Id}"
+                iref = bpy.data.objects.new(name=name, object_data=None)
+                iref['rhid'] = str(ob.Attributes.Id)
+                iref.empty_display_type = 'PLAIN_AXES'
+                iref.instance_type = 'COLLECTION'
+                iref.instance_collection = idef_col
+                iref.matrix_world = converters.utils.matrix_from_xform(ob.Geometry.Xform, scale)
+                layer = layerids.get(ob.Attributes.LayerIndex, context.scene.collection)
+                iref_pending.setdefault(layer, []).append(iref)
+                iref_count += 1
+            except Exception: pass
+        profiler.step(f"9d. [OBJ] Created {iref_count} instance empties (pre-OBJ)")
 
     if not lines:
         profiler.step("9. [OBJ] No geometry to import")
@@ -264,19 +327,30 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
     obj_text = '\n'.join(lines)
     profiler.step(f"9b. [OBJ] Built {len(lines):,} lines for {len(obj_meta)} objects")
 
-    # Phase 2: Write to temp file + import via Blender C
+    # Phase 2: Write OBJ + MTL to temp files, import via Blender C
     tmp = tempfile.NamedTemporaryFile(suffix='.obj', delete=False)
     tmp.close()
     try:
-        with open(tmp.name, 'w', buffering=16*1024*1024) as f:
-            f.write(obj_text)
-        profiler.step(f"10. [OBJ] Written {os.path.getsize(tmp.name)/1024/1024:.0f}MB OBJ")
+        # Write MTL file alongside OBJ
+        if mtl_lines:
+            mtl_path = tmp.name.replace('.obj', '.mtl')
+            with open(mtl_path, 'w') as f:
+                f.write('\n'.join(mtl_lines))
+            lines.insert(1, f'mtllib {os.path.basename(mtl_path)}')
 
-        bpy.ops.wm.obj_import(filepath=tmp.name, use_split_objects=True, use_split_groups=True)
+        with open(tmp.name, 'w', buffering=16*1024*1024) as f:
+            f.write('\n'.join(lines))
+        profiler.step(f"10. [OBJ] Written {os.path.getsize(tmp.name)/1024/1024:.0f}MB OBJ + MTL")
+
+        bpy.ops.wm.obj_import(filepath=tmp.name, use_split_objects=True, use_split_groups=True,
+                              up_axis='Z', forward_axis='Y')
         profiler.step(f"11. [OBJ] Imported {len(bpy.data.objects)} objects via Blender C importer")
     finally:
         try: os.unlink(tmp.name)
         except Exception: pass
+        if mtl_lines:
+            try: os.unlink(mtl_path)
+            except Exception: pass
 
     # Phase 3: Reconcile metadata using O(1) name→object lookup (no sort needed)
     # Build name→object dict from imported meshes
@@ -327,9 +401,38 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
         for ob in objs:
             try: col.objects.link(ob)
             except Exception: pass
+    # Also link instance empties (created pre-OBJ)
+    for layer, objs in iref_pending.items():
+        for iref in objs:
+            try: layer.objects.link(iref)
+            except Exception: pass
 
-    profiler.step(f"12. [OBJ] Reconciled metadata for {count} objects")
-    profiler.finish(f"OBJ Fast-Path Import Complete ({count} objects)")
+    profiler.step(f"12. [OBJ] Reconciled metadata for {count} objects + {iref_count} instances")
+
+    # --- Phase 4: Block template objects (Python path into [Block] collections) ---
+    if idef_objects:
+        link_opts = options.copy()
+        link_opts["defer_link"] = True
+        idef_pending = {}
+        idef_obj_map = options.get("idef_obj_map", {})
+        converters.utils.reset_all_dict(context)
+        for ob in idef_objects:
+            try:
+                t = converters.convert_object(context, ob, model, layerids, materials, scale, link_opts)
+                if t:
+                    blk_col = idef_obj_map.get(str(ob.Attributes.Id), None)
+                    if blk_col:
+                        idef_pending.setdefault(blk_col, []).append(t)
+                    t.hide_viewport = True
+                    t.hide_render = True
+            except Exception: pass
+        for col, objs in idef_pending.items():
+            for ob in objs:
+                try: col.objects.link(ob)
+                except Exception: pass
+        profiler.step(f"13. [OBJ] Converted {len(idef_objects)} block template objects")
+
+    profiler.finish(f"OBJ Fast-Path Import Complete ({count} objects + {len(idef_objects)} blocks + {iref_count} instances)")
 
 
 def _read_3dm_internal(context : bpy.types.Context, options : Dict[str, Any]) -> Set[str]:
