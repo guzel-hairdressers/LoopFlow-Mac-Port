@@ -191,10 +191,10 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
     v_off = 0
     vt_off = 0
     last_mat_name = None
-    # Collect InstanceDefinition template objects — these go to [Block] collections, not OBJ
-    idef_objects = []
-    # Collect InstanceReference objects — these become empties, not OBJ meshes
-    iref_objects = []
+    # Objects that need Python-path handling (not OBJ):
+    idef_objects = []   # Block template objects → [Block] collections
+    iref_objects = []   # Instance references → empties
+    subd_objects = []   # SubD → needs modifier + crease edges (Python path)
 
     for ob in model.Objects:
         og = ob.Geometry
@@ -214,8 +214,14 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
                 idef_objects.append(ob)
             continue
 
+        # SubD objects: skip OBJ, handle via Python path (needs modifier + crease edges)
+        if ot == r3d.ObjectType.SubD:
+            if not is_idef:
+                subd_objects.append(ob)
+            continue
+
         # Curves and other non-mesh types: skip
-        if ot not in (r3d.ObjectType.Brep, r3d.ObjectType.Extrusion, r3d.ObjectType.Mesh, r3d.ObjectType.SubD):
+        if ot not in (r3d.ObjectType.Brep, r3d.ObjectType.Extrusion, r3d.ObjectType.Mesh):
             continue
 
         # Tessellate visible (non-idef) mesh objects for OBJ
@@ -289,7 +295,7 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
         v_off += nv
         if has_uv: vt_off += nv
 
-    profiler.step(f"9c. [OBJ] Skipped {len(idef_objects)} idef templates, {len(iref_objects)} irefs")
+    profiler.step(f"9c. [OBJ] Skipped {len(idef_objects)} idef, {len(iref_objects)} iref, {len(subd_objects)} subd")
 
     # --- Create instance empties NOW while Blender namemap is small ---
     # (After 52K OBJ objects exist, bpy.data.objects.new() slows from 0.015ms→5ms each)
@@ -431,6 +437,24 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
                 try: col.objects.link(ob)
                 except Exception: pass
         profiler.step(f"13. [OBJ] Converted {len(idef_objects)} block template objects")
+
+    # SubD objects: Python path (needs Subdivision modifier, crease edges, sharp edges)
+    if subd_objects:
+        link_opts = options.copy()
+        link_opts["defer_link"] = True
+        subd_pending = {}
+        for ob in subd_objects:
+            try:
+                t = converters.convert_object(context, ob, model, layerids, materials, scale, link_opts)
+                if t:
+                    layer = layerids.get(ob.Attributes.LayerIndex, context.scene.collection)
+                    subd_pending.setdefault(layer, []).append(t)
+            except Exception: pass
+        for layer, objs in subd_pending.items():
+            for ob in objs:
+                try: layer.objects.link(ob)
+                except Exception: pass
+        profiler.step(f"14. [OBJ] Converted {len(subd_objects)} SubD objects")
 
     profiler.finish(f"OBJ Fast-Path Import Complete ({count} objects + {len(idef_objects)} blocks + {iref_count} instances)")
 
