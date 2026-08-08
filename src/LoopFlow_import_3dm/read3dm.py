@@ -173,10 +173,12 @@ def _import_via_ply_fastpath(context, model, toplayer, layerids, materials, scal
 
     # Phase 1: Build PLY binary data
     profiler.step("9. [PLY] Building geometry data")
+    dup_map = {}       # obj_meta_index → original_obj_idx (for duplicates)
+    sig_to_obj = {}    # signature → obj_idx (dedup lookup)
     verts = array('f')
     face_counts = array('B')
     face_indices = array('I')
-    obj_meta = []
+    obj_meta = []      # (guid, name, layer_idx, mat_idx, color, is_idef)
     idef_objects = []
     iref_objects = []
     subd_objects = []
@@ -225,13 +227,43 @@ def _import_via_ply_fastpath(context, model, toplayer, layerids, materials, scal
             else: color = layer_info_cache.get(oa.LayerIndex, (-1,(200,200,200,255)))[1]
         except Exception: pass
 
-        obj_meta.append((oa.Id, oa.Name if oa.Name else f"LF_{oa.Id}", oa.LayerIndex, mat_idx, color))
-        total_v += nv; total_f += nf
-        for v in msh.Vertices:
-            verts.extend((v.X*scale, v.Y*scale, v.Z*scale))
+        # Geometry dedup signature (compute before OBJ write)
+        bb_min_x=bb_min_y=bb_min_z=float('inf'); bb_max_x=bb_max_y=bb_max_z=float('-inf')
+        n_tris=0; n_quads=0
         for face in msh.Faces:
-            f0,f1,f2,f3 = face[0],face[1],face[2],face[3]
-            if f3 == f2:
+            if face[3]==face[2]: n_tris+=1
+            else: n_quads+=1
+        for v in msh.Vertices:
+            x,y,z=v.X*scale,v.Y*scale,v.Z*scale
+            verts.extend((x,y,z))
+            if x<bb_min_x:bb_min_x=x
+            elif x>bb_max_x:bb_max_x=x
+            if y<bb_min_y:bb_min_y=y
+            elif y>bb_max_y:bb_max_y=y
+            if z<bb_min_z:bb_min_z=z
+            elif z>bb_max_z:bb_max_z=z
+        total_v+=nv; total_f+=nf
+
+        sig = converters.utils.compute_mesh_signature_from_precomputed(
+            nv,nf,bb_min_x,bb_min_y,bb_min_z,bb_max_x,bb_max_y,bb_max_z,
+            n_tris,n_quads,nf-n_tris-n_quads) if (nv>0 and nf>0) else None
+        pre_key,full_hash = sig if sig else (None,None)
+
+        meta_entry = (oa.Id, oa.Name if oa.Name else f"LF_{oa.Id}", oa.LayerIndex, mat_idx, color, False)
+        obj_idx = len(obj_meta)
+        obj_meta.append(meta_entry)
+
+        if pre_key is not None and pre_key in sig_to_obj:
+            bucket = sig_to_obj[pre_key]
+            if full_hash in bucket:
+                dup_map[obj_idx] = bucket[full_hash]
+                continue  # skip OBJ write
+            bucket[full_hash] = obj_idx
+        elif pre_key is not None:
+            sig_to_obj.setdefault(pre_key,{})[full_hash]=obj_idx
+        for face in msh.Faces:
+            f0,f1,f2,f3=face[0],face[1],face[2],face[3]
+            if f3==f2:
                 face_counts.append(3); face_indices.extend((f0,f1,f2))
             else:
                 face_counts.append(4); face_indices.extend((f0,f1,f2,f3))
@@ -393,6 +425,8 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
                 mtl_lines.append(f'\nnewmtl {blmat.name}')
                 mtl_lines.append(f'Kd {dc[0]:.4f} {dc[1]:.4f} {dc[2]:.4f}')
 
+    dup_map = {}       # obj_meta_index → original_obj_idx (for geometry dedup)
+    sig_to_obj = {}    # geometry signature → obj_idx
     lines = ['# OBJ from LoopFlow']
     obj_meta = []  # parallel array: (guid, name, layer_idx, mat_idx, color, is_idef)
     v_off = 0
@@ -453,6 +487,7 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
             continue
 
         nv = len(msh.Vertices)
+        nf = len(msh.Faces)
         layer_idx = oa.LayerIndex
         color = (200, 200, 200, 255)
         mat_idx = -1
@@ -468,9 +503,42 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
                 color = layer_info_cache.get(layer_idx, (-1, (200, 200, 200, 255)))[1]
         except Exception: pass
 
-        obj_meta.append((oa.Id, oa.Name if oa.Name else f"LF_{oa.Id}", oa.LayerIndex, mat_idx, color, False))
-        idx = len(obj_meta) - 1
+        # Geometry dedup: compute signature from bbox + face counts
+        bb_min_x=bb_min_y=bb_min_z=float('inf'); bb_max_x=bb_max_y=bb_max_z=float('-inf')
+        n_tris=0; n_quads=0
+        face_data = list(msh.Faces)  # materialize once for both dedup and OBJ writing
+        for f in face_data:
+            if f[3]==f[2]: n_tris+=1
+            else: n_quads+=1
+        for v in msh.Vertices:
+            x,y,z=v.X*scale,v.Y*scale,v.Z*scale
+            if x<bb_min_x:bb_min_x=x
+            elif x>bb_max_x:bb_max_x=x
+            if y<bb_min_y:bb_min_y=y
+            elif y>bb_max_y:bb_max_y=y
+            if z<bb_min_z:bb_min_z=z
+            elif z>bb_max_z:bb_max_z=z
+
+        sig = converters.utils.compute_mesh_signature_from_precomputed(
+            nv,nf,bb_min_x,bb_min_y,bb_min_z,bb_max_x,bb_max_y,bb_max_z,
+            n_tris,n_quads,nf-n_tris-n_quads) if (nv>0 and nf>0) else None
+        pre_key,full_hash = sig if sig else (None,None)
+
+        meta_entry = (oa.Id, oa.Name if oa.Name else f"LF_{oa.Id}", oa.LayerIndex, mat_idx, color, False)
+        idx = len(obj_meta)
+        obj_meta.append(meta_entry)
+
+        if pre_key is not None and pre_key in sig_to_obj:
+            bucket = sig_to_obj[pre_key]
+            if full_hash in bucket:
+                dup_map[idx] = bucket[full_hash]
+                continue  # skip OBJ write (duplicate geometry)
+
+        if pre_key is not None:
+            sig_to_obj.setdefault(pre_key,{})[full_hash]=idx
+
         lines.append(f'o obj_{idx}')
+        # (OBJ geometry writing follows — uses face_data list built above)
         mat_name = None
         if mat_idx >= 0:
             blmat = materials.get(mat_idx, materials.get(str(mat_idx)))
@@ -485,7 +553,7 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
         if has_uv:
             for uv in tc:
                 lines.append(f'vt {uv.X:.6f} {uv.Y:.6f}')
-        for face in msh.Faces:
+        for face in face_data:
             f0,f1,f2,f3 = face[0]+1, face[1]+1, face[2]+1, face[3]+1
             a,b,c,d = f0+v_off, f1+v_off, f2+v_off, f3+v_off
             if has_uv:
@@ -502,7 +570,7 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
         v_off += nv
         if has_uv: vt_off += nv
 
-    profiler.step(f"9c. [OBJ] Skipped {len(idef_objects)} idef, {len(iref_objects)} iref, {len(subd_objects)} subd")
+    profiler.step(f"9c. [OBJ] {len(obj_meta)} objects ({len(dup_map)} dedup), skipped {len(idef_objects)} idef, {len(iref_objects)} iref, {len(subd_objects)} subd")
 
     # --- Create instance empties NOW while Blender namemap is small ---
     # (After 52K OBJ objects exist, bpy.data.objects.new() slows from 0.015ms→5ms each)
@@ -589,8 +657,15 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
 
     for i in range(len(obj_meta)):
         ob = imported_by_name.get(f'obj_{i}')
-        if not ob: continue
         guid, name, layer_idx, mat_idx, color, is_idef = obj_meta[i]
+
+        # Handle duplicates: create new object sharing the original's mesh
+        if not ob and i in dup_map:
+            orig_ob = imported_by_name.get(f'obj_{dup_map[i]}')
+            if orig_ob:
+                ob = bpy.data.objects.new(name=f'obj_{i}', object_data=orig_ob.data)
+
+        if not ob: continue
         ob['rhid'] = str(guid)
         if name: ob['rhname'] = name
         ob.color = (color[0]/255.0, color[1]/255.0, color[2]/255.0, color[3]/255.0)
@@ -602,7 +677,7 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
         else:
             pending_links.setdefault(target_col, []).append(ob)
 
-    profiler.step(f"12b. [OBJ] Tagged {len(obj_meta)} objects, {len(pending_links)} batches")
+    profiler.step(f"12b. [OBJ] Tagged {len(obj_meta)} objects ({len(dup_map)} dedup), {len(pending_links)} batches")
 
     # Material assignment: SKIPPED in OBJ fast path — assigning materials to 52K
     # individual meshes via data.materials.append() takes 190s+. Materials are
