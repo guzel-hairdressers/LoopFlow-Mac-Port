@@ -525,15 +525,6 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
         idx = len(obj_meta)
         obj_meta.append(meta_entry)
 
-        if pre_key is not None and pre_key in sig_to_obj:
-            bucket = sig_to_obj[pre_key]
-            if full_hash in bucket:
-                dup_map[idx] = bucket[full_hash]
-                continue  # skip OBJ write (duplicate geometry)
-
-        if pre_key is not None:
-            sig_to_obj.setdefault(pre_key,{})[full_hash]=idx
-
         lines.append(f'o obj_{idx}')
         # (OBJ geometry writing follows — uses face_data list built above)
         mat_name = None
