@@ -449,10 +449,9 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
             iref_objects.append(ob)
             continue
 
-        # Block template objects: skip OBJ, handle via Python path into [Block] collections
+        # Block template objects: collect ALL types (curves, points included — needed for blocks)
         if is_idef:
-            if ot in (r3d.ObjectType.Brep, r3d.ObjectType.Extrusion, r3d.ObjectType.Mesh, r3d.ObjectType.SubD):
-                idef_objects.append(ob)
+            idef_objects.append(ob)
             continue
 
         # SubD objects: skip OBJ, handle via Python path (needs modifier + crease edges)
