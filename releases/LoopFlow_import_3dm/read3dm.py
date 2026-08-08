@@ -646,6 +646,8 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
             f.write('\n'.join(lines))
         profiler.step(f"10. [OBJ] Written {os.path.getsize(tmp.name)/1024/1024:.0f}MB OBJ + MTL")
 
+        pre_import_objs = set(context.blend_data.objects)
+
         bpy.ops.wm.obj_import(filepath=tmp.name, use_split_objects=True, use_split_groups=True,
                               up_axis='Z', forward_axis='Y')
         profiler.step(f"11. [OBJ] Imported {len(bpy.data.objects)} objects via Blender C importer")
@@ -656,14 +658,20 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
             try: os.unlink(mtl_path)
             except Exception: pass
 
-    # Phase 3: Reconcile metadata using O(1) name→object lookup (no sort needed)
-    # Build name→object dict from imported meshes
-    imported_by_name = {}
-    for o in context.blend_data.objects:
-        if o.type == 'MESH' and o.name.startswith('obj_'):
-            imported_by_name[o.name] = o
+    # Phase 3: Reconcile metadata using O(1) index lookup on newly imported objects only
+    # (prevents object collisions across multiple imports or Appends when Blender renames to obj_0.001)
+    newly_imported = [o for o in context.blend_data.objects if o not in pre_import_objs and o.type == 'MESH']
 
-    count = len(imported_by_name)
+    imported_by_index = {}
+    for o in newly_imported:
+        try:
+            base_part = o.name.split('.')[0]
+            if base_part.startswith('obj_'):
+                idx = int(base_part.replace('obj_', ''))
+                imported_by_index[idx] = o
+        except Exception: pass
+
+    count = len(imported_by_index)
     profiler.step(f"12a. [OBJ] Indexed {count} imported objects")
 
     # Material lookup cache
@@ -679,12 +687,12 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
     pending_links = {}  # collection → list of objects
 
     for i in range(len(obj_meta)):
-        ob = imported_by_name.get(f'obj_{i}')
+        ob = imported_by_index.get(i)
         guid, name, layer_idx, mat_idx, color, is_idef = obj_meta[i]
 
         # Handle duplicates: create new object sharing the original's mesh
         if not ob and i in dup_map:
-            orig_ob = imported_by_name.get(f'obj_{dup_map[i]}')
+            orig_ob = imported_by_index.get(dup_map[i])
             if orig_ob:
                 ob = bpy.data.objects.new(name=f'obj_{i}', object_data=orig_ob.data)
 
@@ -727,7 +735,7 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
     if "Collection" in context.blend_data.collections: cols_to_unlink.add(context.blend_data.collections["Collection"])
 
     for col in cols_to_unlink:
-        for ob in imported_by_name.values():
+        for ob in imported_by_index.values():
             if ob.name in col.objects:
                 try: col.objects.unlink(ob)
                 except Exception: pass
