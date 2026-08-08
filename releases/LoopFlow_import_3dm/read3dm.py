@@ -768,15 +768,14 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
                 except Exception: pass
         profiler.step(f"14. [OBJ] Converted {len(python_path_objects)} python-path objects (SubD, Curves, Annotations)")
 
-    # Apply layer visibility exclusions
+    # Apply layer visibility exclusions (matching legacy behavior)
     if layer_visibility:
         def _apply_vis(layer_col, vis):
             if not layer_col: return
             for child in layer_col.children:
                 c_name = child.collection.name
                 if c_name in vis:
-                    # Use own_visible so visible sub-layers (e.g. Walls::Panels) are not excluded
-                    child.exclude = not vis[c_name].get("own_visible", True)
+                    child.exclude = not vis[c_name].get("effective_visible", True)
                 _apply_vis(child, vis)
         try: _apply_vis(context.view_layer.layer_collection, layer_visibility)
         except Exception: pass
