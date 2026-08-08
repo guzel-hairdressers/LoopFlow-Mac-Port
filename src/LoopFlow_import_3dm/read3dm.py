@@ -5,6 +5,7 @@ import json
 import gc
 import resource
 import tempfile
+from array import array
 
 from pathlib import Path
 
@@ -150,6 +151,212 @@ def read_3dm(context : bpy.types.Context, options : Dict[str, Any]) -> Set[str]:
         return _read_3dm_internal(context, options)
     finally:
         main_mod._is_syncing_layers = orig_sync
+
+def _import_via_ply_fastpath(context, model, toplayer, layerids, materials, scale, options, profiler, filepath):
+    """Fast path: write PLY binary → import → split by loose parts → reconcile metadata."""
+    import rhino3dm as r3d
+
+    # Build layer info cache
+    layer_info_cache = {}
+    if model and hasattr(model, "Layers"):
+        for l_idx in range(len(model.Layers)):
+            l = model.Layers[l_idx]
+            l_mat_idx = -1
+            if hasattr(l, "RenderMaterialInstanceId") and str(l.RenderMaterialInstanceId) in materials:
+                l_mat_idx = str(l.RenderMaterialInstanceId)
+            elif hasattr(l, "RenderMaterialIndex"): l_mat_idx = l.RenderMaterialIndex
+            elif hasattr(l, "MaterialIndex"): l_mat_idx = l.MaterialIndex
+            l_color = (200, 200, 200, 255)
+            try: l_color = l.Color
+            except Exception: pass
+            layer_info_cache[l_idx] = (l_mat_idx, l_color)
+
+    # Phase 1: Build PLY binary data
+    profiler.step("9. [PLY] Building geometry data")
+    verts = array('f')
+    face_counts = array('B')
+    face_indices = array('I')
+    obj_meta = []
+    idef_objects = []
+    iref_objects = []
+    subd_objects = []
+    total_v = 0; total_f = 0
+
+    for ob in model.Objects:
+        og = ob.Geometry
+        if not og: continue
+        ot = og.ObjectType
+        oa = ob.Attributes
+        is_idef = oa.IsInstanceDefinitionObject if hasattr(oa, "IsInstanceDefinitionObject") else False
+
+        if ot == r3d.ObjectType.InstanceReference:
+            iref_objects.append(ob); continue
+        if is_idef:
+            if ot in (r3d.ObjectType.Brep, r3d.ObjectType.Extrusion, r3d.ObjectType.Mesh, r3d.ObjectType.SubD):
+                idef_objects.append(ob)
+            continue
+        if ot == r3d.ObjectType.SubD:
+            subd_objects.append(ob); continue
+        if ot not in (r3d.ObjectType.Brep, r3d.ObjectType.Extrusion, r3d.ObjectType.Mesh):
+            continue
+
+        msh = None
+        if ot == r3d.ObjectType.Brep:
+            combined = r3d.Mesh()
+            for fi in range(len(og.Faces)):
+                try:
+                    fm = og.Faces[fi].GetMesh(r3d.MeshType.Any)
+                    if fm: combined.Append(fm)
+                except Exception: pass
+            msh = combined
+        elif ot == r3d.ObjectType.Mesh: msh = og
+        elif ot == r3d.ObjectType.Extrusion: msh = og.GetMesh(r3d.MeshType.Any)
+        if not msh or len(msh.Vertices) == 0: continue
+
+        nv = len(msh.Vertices); nf = len(msh.Faces)
+        mat_idx = -1; color = (200,200,200,255)
+        try:
+            mat_idx = oa.MaterialIndex
+            if oa.MaterialSource == r3d.ObjectMaterialSource.MaterialFromLayer or mat_idx < 0:
+                l_info = layer_info_cache.get(oa.LayerIndex, (-1,(200,200,200,255)))
+                mat_idx = l_info[0]; color = l_info[1]
+            elif oa.ColorSource == r3d.ObjectColorSource.ColorFromObject:
+                color = oa.ObjectColor
+            else: color = layer_info_cache.get(oa.LayerIndex, (-1,(200,200,200,255)))[1]
+        except Exception: pass
+
+        obj_meta.append((oa.Id, oa.Name if oa.Name else f"LF_{oa.Id}", oa.LayerIndex, mat_idx, color))
+        total_v += nv; total_f += nf
+        for v in msh.Vertices:
+            verts.extend((v.X*scale, v.Y*scale, v.Z*scale))
+        for face in msh.Faces:
+            f0,f1,f2,f3 = face[0],face[1],face[2],face[3]
+            if f3 == f2:
+                face_counts.append(3); face_indices.extend((f0,f1,f2))
+            else:
+                face_counts.append(4); face_indices.extend((f0,f1,f2,f3))
+
+    profiler.step(f"9b. [PLY] Built {total_v:,}v {total_f:,}f for {len(obj_meta)} objects | skipped {len(idef_objects)} idef, {len(iref_objects)} iref, {len(subd_objects)} subd")
+
+    if total_v == 0:
+        profiler.step("9. [PLY] No geometry")
+        return
+
+    # Phase 2a: Create instance empties (before namemap gets big)
+    iref_pending = {}; iref_count = 0
+    if iref_objects:
+        idef_map = options.get("idef_map", {})
+        tag_cache = {}
+        for ob in iref_objects:
+            try:
+                parent_id = ob.Geometry.ParentIdefId
+                if parent_id not in tag_cache:
+                    bn = idef_map.get(parent_id, f"Block {parent_id}")
+                    ct = converters.utils.create_tag_dict(parent_id, bn, None, None, True)
+                    idef_col = converters.utils.get_or_create_iddata(context.blend_data.collections, ct, None)
+                    tag_cache[parent_id] = idef_col
+                name = ob.Attributes.Name if ob.Attributes.Name else f"LF_{ob.Attributes.Id}"
+                iref = bpy.data.objects.new(name=name, object_data=None)
+                iref['rhid'] = str(ob.Attributes.Id)
+                iref.empty_display_type = 'PLAIN_AXES'; iref.instance_type = 'COLLECTION'
+                iref.instance_collection = tag_cache[parent_id]
+                iref.matrix_world = converters.utils.matrix_from_xform(ob.Geometry.Xform, scale)
+                iref_pending.setdefault(layerids.get(ob.Attributes.LayerIndex, context.scene.collection), []).append(iref)
+                iref_count += 1
+            except Exception: pass
+        profiler.step(f"9c. [PLY] Created {iref_count} instance empties")
+
+    # Phase 2b: Write PLY + Import
+    tmp = tempfile.NamedTemporaryFile(suffix='.ply', delete=False); tmp.close()
+    try:
+        hdr = f'ply\nformat binary_little_endian 1.0\nelement vertex {total_v}\nproperty float x\nproperty float y\nproperty float z\nelement face {total_f}\nproperty list uchar int vertex_indices\nend_header\n'
+        with open(tmp.name, 'wb') as f:
+            f.write(hdr.encode()); f.write(verts.tobytes())
+            ip = 0
+            for c in face_counts:
+                f.write(bytes([c])); f.write(face_indices[ip:ip+c].tobytes()); ip += c
+        profiler.step(f"10. [PLY] Written {os.path.getsize(tmp.name)/1024/1024:.0f}MB PLY")
+
+        bpy.ops.wm.ply_import(filepath=tmp.name)
+        # PLY creates 1 merged mesh — split by loose parts to separate
+        pl_obj = context.active_object
+        if pl_obj:
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.separate(type='LOOSE')
+            bpy.ops.object.mode_set(mode='OBJECT')
+        profiler.step(f"11. [PLY] Imported & split into {len(context.blend_data.objects)} objects")
+    finally:
+        try: os.unlink(tmp.name)
+        except Exception: pass
+
+    # Phase 3: Map split objects to metadata
+    # After split: original = obj_meta[0], .001 = obj_meta[1], .002 = obj_meta[2], ...
+    split_objs = sorted(
+        [o for o in context.blend_data.objects if o.type == 'MESH' and o != pl_obj and o.name.startswith(pl_obj.name)],
+        key=lambda o: (len(o.name), o.name)
+    )
+    all_parts = [pl_obj] + split_objs  # original is first, then .001, .002, ...
+
+    pending_links = {}
+    for i in range(min(len(all_parts), len(obj_meta))):
+        ob = all_parts[i]; guid, name, layer_idx, mat_idx, color = obj_meta[i]
+        ob.name = f'ply_{i:06d}'  # short unique name, avoids O(N²) namemap
+        ob['rhid'] = str(guid)
+        if name: ob['rhname'] = name
+        ob.color = (color[0]/255.0, color[1]/255.0, color[2]/255.0, color[3]/255.0)
+        # Material: SKIP (assigned later via sync — 190s bottleneck on 52K meshes)
+        pending_links.setdefault(layerids.get(layer_idx, context.scene.collection), []).append(ob)
+
+    profiler.step(f"12. [PLY] Mapped {len(all_parts)} objects")
+
+    # Bulk link
+    for col, objs in pending_links.items():
+        for ob in objs:
+            try: col.objects.link(ob)
+            except Exception: pass
+    for layer, objs in iref_pending.items():
+        for iref in objs:
+            try: layer.objects.link(iref)
+            except Exception: pass
+    profiler.step(f"12b. [PLY] Linked objects and {iref_count} instances")
+
+    # Block templates
+    if idef_objects:
+        link_opts = options.copy(); link_opts["defer_link"] = True
+        idef_obj_map = options.get("idef_obj_map", {})
+        converters.utils.reset_all_dict(context)
+        idef_pend = {}
+        for ob in idef_objects:
+            try:
+                t = converters.convert_object(context, ob, model, layerids, materials, scale, link_opts)
+                if t:
+                    blk = idef_obj_map.get(str(ob.Attributes.Id))
+                    if blk: idef_pend.setdefault(blk, []).append(t)
+                    t.hide_viewport = True; t.hide_render = True
+            except Exception: pass
+        for col, objs in idef_pend.items():
+            for ob in objs:
+                try: col.objects.link(ob)
+                except Exception: pass
+        profiler.step(f"13. [PLY] {len(idef_objects)} block templates")
+
+    # SubD objects
+    if subd_objects:
+        link_opts = options.copy(); link_opts["defer_link"] = True
+        subd_pend = {}
+        for ob in subd_objects:
+            try:
+                t = converters.convert_object(context, ob, model, layerids, materials, scale, link_opts)
+                if t: subd_pend.setdefault(layerids.get(ob.Attributes.LayerIndex, context.scene.collection), []).append(t)
+            except Exception: pass
+        for col, objs in subd_pend.items():
+            for ob in objs:
+                try: col.objects.link(ob)
+                except Exception: pass
+        profiler.step(f"14. [PLY] {len(subd_objects)} SubD objects")
+
+    profiler.finish(f"PLY Fast-Path Complete ({len(all_parts)} objects + {len(idef_objects)} blocks + {iref_count} instances + {len(subd_objects)} subd)")
+
 
 def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scale, options, profiler, filepath):
     """Fast path: write OBJ from 3DM meshes → import via Blender C importer → reconcile metadata."""
