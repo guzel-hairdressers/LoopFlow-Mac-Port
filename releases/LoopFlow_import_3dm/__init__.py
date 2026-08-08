@@ -560,6 +560,7 @@ class Import3dm(bpy.types.Operator, ImportHelper):
 
     def execute(self, context):
         options = self.as_keywords(ignore=("filter_glob",))
+        options["use_fast_import"] = getattr(context.scene, "rhino_use_fast_import", True)
         if options.get("import_mode") == "APPEND":
             options["is_update"] = True
         elif options.get("import_mode") == "OVERRIDE":
@@ -603,6 +604,8 @@ class RHINO_PT_QuickUpdate(bpy.types.Panel):
         col_mesh = box_model.column(align=True)
         col_mesh.prop(scene, "rhino_nurbs_density", text="NURBS Density", slider=True)
         col_mesh.prop(scene, "rhino_subd_subsurf_level", text="SubD Subdivisions")
+
+        box_model.prop(scene, "rhino_use_fast_import", text="Fast Import (OBJ)")
 
         layout.separator()
 
@@ -680,6 +683,11 @@ def register():
         min=0,
         max=5
     )
+    bpy.types.Scene.rhino_use_fast_import = bpy.props.BoolProperty(
+        name="Fast Import (OBJ)",
+        description="Use OBJ fast-path import (10x faster for large models, slightly slower for small ones). Disable for legacy Python import with full feature set.",
+        default=True
+    )
     bpy.types.Scene.rhino_material_merge_mode = bpy.props.EnumProperty(
         name="Material Merging",
         description="Material merging behavior for imported models",
@@ -723,6 +731,7 @@ def unregister():
     del bpy.types.Scene.rhino_weld_meshes
     del bpy.types.Scene.rhino_nurbs_density
     del bpy.types.Scene.rhino_subd_subsurf_level
+    del bpy.types.Scene.rhino_use_fast_import
     del bpy.types.Scene.rhino_material_merge_mode
     del bpy.types.Scene.rhino_cam_scale
     del bpy.types.Scene.rhino_cam_lens_mult

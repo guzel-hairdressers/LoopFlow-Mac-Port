@@ -958,9 +958,21 @@ def _read_3dm_internal(context : bpy.types.Context, options : Dict[str, Any]) ->
         converters.handle_instance_definitions(context, model, toplayer, "Instance Definitions")
         profiler.step("8. Instance Definitions Setup")
 
+    # Pre-map block template object GUIDs -> their [Block] collections (needed by both paths)
+    idef_obj_map = {}
+    if import_instances and hasattr(model, "InstanceDefinitions"):
+        for idef in model.InstanceDefinitions:
+            block_name = f"[Block] {idef.Name}" if idef.Name else f"Block {idef.Id}"
+            blk_col = context.blend_data.collections.get(block_name)
+            if blk_col:
+                try:
+                    for guid in idef.GetObjectIds():
+                        idef_obj_map[str(guid)] = blk_col
+                except Exception: pass
+    options["idef_obj_map"] = idef_obj_map
+
     # --- OBJ Fast Path for full imports ---
-    # Bypasses the slow Python mesh-creation loop. Writes OBJ → imports via Blender C.
-    if not is_update:
+    if not is_update and options.get("use_fast_import", True):
         _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scale, options, profiler, filepath)
         return {'FINISHED'}
 
