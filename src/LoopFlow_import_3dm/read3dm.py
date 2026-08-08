@@ -710,10 +710,19 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
 
     profiler.step(f"12. [OBJ] Reconciled metadata for {count} objects + {iref_count} instances")
 
-    # --- Phase 4: Block template objects (Python path into [Block] collections) ---
-    # Block templates already converted pre-OBJ (step 9d) — skip here.
+    # Unlink OBJ objects from default "Collection" (auto-linked by import)
+    scene_col = context.scene.collection
+    for ob in imported_by_name.values():
+        try: scene_col.objects.unlink(ob)
+        except Exception: pass
 
-    # SubD objects: Python path (needs Subdivision modifier, crease edges, sharp edges)
+    # Link "Instance Definitions" into view layer (so [Block] collections render via instances)
+    instance_col = context.blend_data.collections.get("Instance Definitions")
+    if instance_col and toplayer and instance_col.name not in toplayer.children:
+        try: toplayer.children.link(instance_col)
+        except Exception: pass
+
+    # --- Phase 4: Block templates + SubD ---
     if subd_objects:
         link_opts = options.copy()
         link_opts["defer_link"] = True
