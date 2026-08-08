@@ -390,7 +390,7 @@ def _import_via_ply_fastpath(context, model, toplayer, layerids, materials, scal
     profiler.finish(f"PLY Fast-Path Complete ({len(all_parts)} objects + {len(idef_objects)} blocks + {iref_count} instances + {len(subd_objects)} subd)")
 
 
-def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scale, options, profiler, filepath):
+def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scale, options, profiler, filepath, layer_visibility=None):
     """Fast path: write OBJ from 3DM meshes → import via Blender C importer → reconcile metadata."""
     import rhino3dm as r3d
 
@@ -572,10 +572,24 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
 
     profiler.step(f"9c. [OBJ] {len(obj_meta)} objects ({len(dup_map)} dedup), skipped {len(idef_objects)} idef, {len(iref_objects)} iref, {len(subd_objects)} subd")
 
+    # --- Block templates FIRST so [Block] collections have geometry before instances ---
+    if idef_objects:
+        link_opts = options.copy(); link_opts["defer_link"] = True
+        idef_obj_map = options.get("idef_obj_map", {})
+        converters.utils.reset_all_dict(context)
+        for ob in idef_objects:
+            try:
+                t = converters.convert_object(context, ob, model, layerids, materials, scale, link_opts)
+                if t:
+                    blk = idef_obj_map.get(str(ob.Attributes.Id))
+                    if blk and t.name not in blk.objects: blk.objects.link(t)
+                    t.hide_viewport = True; t.hide_render = True
+            except Exception: pass
+        profiler.step(f"9d. [OBJ] {len(idef_objects)} block templates populated")
+
     # --- Create instance empties NOW while Blender namemap is small ---
     # (After 52K OBJ objects exist, bpy.data.objects.new() slows from 0.015ms→5ms each)
-    iref_pending = {}  # collection → list of empties
-    iref_count = 0
+    iref_pending = {}; iref_count = 0
     if iref_objects:
         idef_map = options.get("idef_map", {})
         tag_cache = {}
@@ -698,27 +712,7 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
     profiler.step(f"12. [OBJ] Reconciled metadata for {count} objects + {iref_count} instances")
 
     # --- Phase 4: Block template objects (Python path into [Block] collections) ---
-    if idef_objects:
-        link_opts = options.copy()
-        link_opts["defer_link"] = True
-        idef_pending = {}
-        idef_obj_map = options.get("idef_obj_map", {})
-        converters.utils.reset_all_dict(context)
-        for ob in idef_objects:
-            try:
-                t = converters.convert_object(context, ob, model, layerids, materials, scale, link_opts)
-                if t:
-                    blk_col = idef_obj_map.get(str(ob.Attributes.Id), None)
-                    if blk_col:
-                        idef_pending.setdefault(blk_col, []).append(t)
-                    t.hide_viewport = True
-                    t.hide_render = True
-            except Exception: pass
-        for col, objs in idef_pending.items():
-            for ob in objs:
-                try: col.objects.link(ob)
-                except Exception: pass
-        profiler.step(f"13. [OBJ] Converted {len(idef_objects)} block template objects")
+    # Block templates already converted pre-OBJ (step 9d) — skip here.
 
     # SubD objects: Python path (needs Subdivision modifier, crease edges, sharp edges)
     if subd_objects:
@@ -737,6 +731,18 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
                 try: layer.objects.link(ob)
                 except Exception: pass
         profiler.step(f"14. [OBJ] Converted {len(subd_objects)} SubD objects")
+
+    # Apply layer visibility exclusions (matching legacy behavior)
+    if layer_visibility:
+        def _apply_vis(layer_col, vis):
+            if not layer_col: return
+            for child in layer_col.children:
+                c_name = child.collection.name
+                if c_name in vis:
+                    child.exclude = not vis[c_name].get("effective_visible", True)
+                _apply_vis(child, vis)
+        try: _apply_vis(context.view_layer.layer_collection, layer_visibility)
+        except Exception: pass
 
     profiler.finish(f"OBJ Fast-Path Import Complete ({count} objects + {len(idef_objects)} blocks + {iref_count} instances)")
 
@@ -1048,7 +1054,7 @@ def _read_3dm_internal(context : bpy.types.Context, options : Dict[str, Any]) ->
 
     # --- OBJ Fast Path for full imports ---
     if not is_update and options.get("use_fast_import", True):
-        _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scale, options, profiler, filepath)
+        _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scale, options, profiler, filepath, layer_visibility)
         return {'FINISHED'}
 
     import_curves = options.get("import_curves", True)
