@@ -731,11 +731,14 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
                 try: col.objects.unlink(ob)
                 except Exception: pass
 
-    # Link "Instance Definitions" into view layer (so [Block] collections render via instances)
+    # Ensure "Instance Definitions" is unlinked from scene layer collections
+    # (keeps raw block template geometries out of scene origin/background while allowing instance empties to render geometry)
     instance_col = context.blend_data.collections.get("Instance Definitions")
-    if instance_col and toplayer and instance_col.name not in toplayer.children:
-        try: toplayer.children.link(instance_col)
-        except Exception: pass
+    if instance_col:
+        for p_col in [toplayer, context.scene.collection, context.collection]:
+            if p_col and instance_col.name in p_col.children:
+                try: p_col.children.unlink(instance_col)
+                except Exception: pass
 
     # --- Phase 4: Non-OBJ objects (SubD, Curves, Annotations, Points) ---
     if python_path_objects:

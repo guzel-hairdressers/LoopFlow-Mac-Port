@@ -88,11 +88,3 @@ def populate_instance_definitions(context, model, toplayer, layername, options, 
                         parent.objects.link(ob)
                 except Exception:
                     pass
-
-    if layername in context.blend_data.collections:
-        instance_col = context.blend_data.collections[layername]
-        try:
-            if instance_col.name not in toplayer.children:
-                toplayer.children.link(instance_col)
-        except Exception:
-            pass
