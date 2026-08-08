@@ -418,8 +418,8 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
     mtl_lines = ['# LoopFlow MTL']
     mat_names_written = set()
     if materials:
-        for key, blmat in materials.items():
-            if isinstance(key, int) and key >= 0 and blmat.name not in mat_names_written:
+        for blmat in materials.values():
+            if blmat and hasattr(blmat, 'name') and blmat.name not in mat_names_written:
                 mat_names_written.add(blmat.name)
                 dc = getattr(blmat, 'diffuse_color', (0.8, 0.8, 0.8, 1.0))
                 mtl_lines.append(f'\nnewmtl {blmat.name}')
@@ -435,7 +435,7 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
     # Objects that need Python-path handling (not OBJ):
     idef_objects = []   # Block template objects → [Block] collections
     iref_objects = []   # Instance references → empties
-    subd_objects = []   # SubD → needs modifier + crease edges (Python path)
+    python_path_objects = [] # SubD, Curves, Annotations, Points (Python path)
 
     for ob in model.Objects:
         og = ob.Geometry
@@ -454,14 +454,9 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
             idef_objects.append(ob)
             continue
 
-        # SubD objects: skip OBJ, handle via Python path (needs modifier + crease edges)
-        if ot == r3d.ObjectType.SubD:
-            if not is_idef:
-                subd_objects.append(ob)
-            continue
-
-        # Curves and other non-mesh types: skip
+        # Non-OBJ objects (SubD, Curves, Annotations, Points): handle via Python path
         if ot not in (r3d.ObjectType.Brep, r3d.ObjectType.Extrusion, r3d.ObjectType.Mesh):
+            python_path_objects.append(ob)
             continue
 
         # Tessellate visible (non-idef) mesh objects for OBJ
@@ -474,13 +469,16 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
                     fm = og_faces[f].GetMesh(r3d.MeshType.Any)
                     if fm: combined.Append(fm)
                 except Exception: pass
+            if len(og_faces) > 1 and len(combined.Vertices) > 0:
+                try:
+                    combined.Vertices.CombineIdentical(True, True)
+                    combined.Compact()
+                except Exception: pass
             msh = combined
         elif ot == r3d.ObjectType.Mesh:
             msh = og
         elif ot == r3d.ObjectType.Extrusion:
             msh = og.GetMesh(r3d.MeshType.Any)
-        elif ot == r3d.ObjectType.SubD:
-            msh = r3d.Mesh.CreateFromSubDControlNet(og, False)
 
         if not msh or len(msh.Vertices) == 0:
             continue
@@ -539,14 +537,24 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
         lines.append(f'o obj_{idx}')
         # (OBJ geometry writing follows — uses face_data list built above)
         mat_name = None
-        if mat_idx >= 0:
+        if mat_idx is not None:
             blmat = materials.get(mat_idx, materials.get(str(mat_idx)))
             if blmat: mat_name = blmat.name
         if mat_name != last_mat_name:
             if mat_name: lines.append(f'usemtl {mat_name}')
             last_mat_name = mat_name
-        for v in msh.Vertices:
-            lines.append(f'v {v.X*scale:.6f} {v.Y*scale:.6f} {v.Z*scale:.6f}')
+
+        v_colors = msh.VertexColors if hasattr(msh, "VertexColors") else None
+        has_vc = len(v_colors) == nv if v_colors else False
+
+        if has_vc:
+            for i, v in enumerate(msh.Vertices):
+                vc = v_colors[i]
+                lines.append(f'v {v.X*scale:.6f} {v.Y*scale:.6f} {v.Z*scale:.6f} {vc.R/255.0:.4f} {vc.G/255.0:.4f} {vc.B/255.0:.4f}')
+        else:
+            for v in msh.Vertices:
+                lines.append(f'v {v.X*scale:.6f} {v.Y*scale:.6f} {v.Z*scale:.6f}')
+
         tc = msh.TextureCoordinates
         has_uv = len(tc) == nv
         if has_uv:
@@ -569,7 +577,7 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
         v_off += nv
         if has_uv: vt_off += nv
 
-    profiler.step(f"9c. [OBJ] {len(obj_meta)} objects ({len(dup_map)} dedup), skipped {len(idef_objects)} idef, {len(iref_objects)} iref, {len(subd_objects)} subd")
+    profiler.step(f"9c. [OBJ] {len(obj_meta)} objects ({len(dup_map)} dedup), skipped {len(idef_objects)} idef, {len(iref_objects)} iref, {len(python_path_objects)} python-path")
 
     # --- Block templates FIRST so [Block] collections have geometry before instances ---
     if idef_objects:
@@ -722,23 +730,23 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
         try: toplayer.children.link(instance_col)
         except Exception: pass
 
-    # --- Phase 4: Block templates + SubD ---
-    if subd_objects:
+    # --- Phase 4: Non-OBJ objects (SubD, Curves, Annotations, Points) ---
+    if python_path_objects:
         link_opts = options.copy()
         link_opts["defer_link"] = True
-        subd_pending = {}
-        for ob in subd_objects:
+        py_pending = {}
+        for ob in python_path_objects:
             try:
                 t = converters.convert_object(context, ob, model, layerids, materials, scale, link_opts)
                 if t:
                     layer = layerids.get(ob.Attributes.LayerIndex, context.scene.collection)
-                    subd_pending.setdefault(layer, []).append(t)
+                    py_pending.setdefault(layer, []).append(t)
             except Exception: pass
-        for layer, objs in subd_pending.items():
+        for layer, objs in py_pending.items():
             for ob in objs:
                 try: layer.objects.link(ob)
                 except Exception: pass
-        profiler.step(f"14. [OBJ] Converted {len(subd_objects)} SubD objects")
+        profiler.step(f"14. [OBJ] Converted {len(python_path_objects)} python-path objects (SubD, Curves, Annotations)")
 
     # Apply layer visibility exclusions (matching legacy behavior)
     if layer_visibility:
