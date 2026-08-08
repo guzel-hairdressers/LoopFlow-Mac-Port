@@ -590,7 +590,8 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
                 if t:
                     blk = idef_obj_map.get(str(ob.Attributes.Id))
                     if blk and t.name not in blk.objects: blk.objects.link(t)
-                    t.hide_viewport = True; t.hide_render = True
+                    # Ensure objects inside block collection are visible so instance empties render geometry
+                    t.hide_viewport = False; t.hide_render = False
             except Exception: pass
         profiler.step(f"9d. [OBJ] {len(idef_objects)} block templates populated")
 
@@ -718,11 +719,17 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
 
     profiler.step(f"12. [OBJ] Reconciled metadata for {count} objects + {iref_count} instances")
 
-    # Unlink OBJ objects from default "Collection" (auto-linked by import)
-    scene_col = context.scene.collection
-    for ob in imported_by_name.values():
-        try: scene_col.objects.unlink(ob)
-        except Exception: pass
+    # Unlink OBJ objects from active collection and default "Collection" (auto-linked by import)
+    cols_to_unlink = set()
+    if context.collection: cols_to_unlink.add(context.collection)
+    if context.scene.collection: cols_to_unlink.add(context.scene.collection)
+    if "Collection" in context.blend_data.collections: cols_to_unlink.add(context.blend_data.collections["Collection"])
+
+    for col in cols_to_unlink:
+        for ob in imported_by_name.values():
+            if ob.name in col.objects:
+                try: col.objects.unlink(ob)
+                except Exception: pass
 
     # Link "Instance Definitions" into view layer (so [Block] collections render via instances)
     instance_col = context.blend_data.collections.get("Instance Definitions")
