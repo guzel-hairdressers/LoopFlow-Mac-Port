@@ -49,15 +49,8 @@ def handle_layers(context, model, toplayer, layerids, materials, update, import_
 
     layer_visibility = {}
 
-    # Setup main container to hold layer collections SPECIFIC to this imported file
-    layer_col_name = f"Layers ({toplayer.name})"
-    layer_col = toplayer.children.get(layer_col_name)
-    if not layer_col:
-        layer_col = context.blend_data.collections.new(name=layer_col_name)
-        try:
-            toplayer.children.link(layer_col)
-        except Exception:
-            pass
+    # Link layer collections directly under toplayer (eliminates extra nesting)
+    layer_col = toplayer
 
     # Build lookup table for LayerTable index
     layer_name_counts = {}

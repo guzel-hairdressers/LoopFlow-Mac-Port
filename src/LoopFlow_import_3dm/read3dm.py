@@ -792,12 +792,15 @@ def _read_3dm_internal(context : bpy.types.Context, options : Dict[str, Any]) ->
 
     is_imported = (master_col is not None) and (master_col.name in context.scene.collection.children) and (toplayer is not None)
 
-    # AUTO-DETECT FIRST RUN IN BLENDER SESSION (IF LOOPFLOW COLLECTION IS MISSING)
-    if is_update and not is_imported and options.get("import_mode") != "APPEND":
+    import_mode = options.get("import_mode", "SYNC")
+
+    # APPEND MODE: Always full fresh import into new collection (e.g. 1.001) on top of existing scene
+    if import_mode == "APPEND":
+        is_update = False
+        op_title = "Import Model (Append Mode)"
+    elif is_update and not is_imported:
         is_update = False  # Automatically perform initial full import into LoopFlow collection!
         op_title = "Update Model (Initial Session Full Import)"
-    elif is_update and options.get("import_mode") == "APPEND":
-        op_title = "Import Model (Append Mode)"
     elif is_update:
         op_title = "Update Model (In-Memory Fast Sync)"
     else:
