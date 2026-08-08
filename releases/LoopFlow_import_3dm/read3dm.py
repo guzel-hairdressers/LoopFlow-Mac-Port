@@ -600,6 +600,7 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
     iref_pending = {}; iref_count = 0
     if iref_objects:
         idef_map = options.get("idef_map", {})
+        idef_obj_map = options.get("idef_obj_map", {})
         tag_cache = {}
         for ob in iref_objects:
             try:
@@ -617,8 +618,17 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
                 iref.instance_type = 'COLLECTION'
                 iref.instance_collection = idef_col
                 iref.matrix_world = converters.utils.matrix_from_xform(ob.Geometry.Xform, scale)
-                layer = layerids.get(ob.Attributes.LayerIndex, context.scene.collection)
-                iref_pending.setdefault(layer, []).append(iref)
+
+                oa = ob.Attributes
+                is_idef = oa.IsInstanceDefinitionObject if hasattr(oa, "IsInstanceDefinitionObject") else False
+                if is_idef:
+                    parent_block_col = idef_obj_map.get(str(oa.Id))
+                    if parent_block_col:
+                        iref_pending.setdefault(parent_block_col, []).append(iref)
+                else:
+                    layer = layerids.get(oa.LayerIndex, context.scene.collection)
+                    iref_pending.setdefault(layer, []).append(iref)
+
                 iref_count += 1
             except Exception: pass
         profiler.step(f"9d. [OBJ] Created {iref_count} instance empties (pre-OBJ)")
