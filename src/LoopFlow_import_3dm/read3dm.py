@@ -466,8 +466,26 @@ def _import_via_obj_fastpath(context, model, toplayer, layerids, materials, scal
             og_faces = og.Faces
             for f in range(len(og_faces)):
                 try:
-                    fm = og_faces[f].GetMesh(r3d.MeshType.Any)
-                    if fm: combined.Append(fm)
+                    face = og_faces[f]
+                    fm = face.GetMesh(r3d.MeshType.Any)
+                    if fm:
+                        if hasattr(face, "OrientationIsReversed") and face.OrientationIsReversed:
+                            if hasattr(fm, 'Normals') and len(fm.Normals) > 0:
+                                for ni in range(len(fm.Normals)):
+                                    n = fm.Normals[ni]
+                                    fm.Normals[ni] = r3d.Vector3d(-n.X, -n.Y, -n.Z)
+                            if hasattr(fm, 'Faces') and len(fm.Faces) > 0:
+                                new_faces = []
+                                for fi in range(len(fm.Faces)):
+                                    pf = fm.Faces[fi]
+                                    f0, f1, f2, f3 = pf[0], pf[1], pf[2], pf[3]
+                                    if f3 == f2: new_faces.append((f0, f2, f1))
+                                    else: new_faces.append((f0, f3, f2, f1))
+                                fm.Faces.Clear()
+                                for nf in new_faces:
+                                    if len(nf) == 3: fm.Faces.AddFace(nf[0], nf[1], nf[2])
+                                    else: fm.Faces.AddFace(nf[0], nf[1], nf[2], nf[3])
+                        combined.Append(fm)
                 except Exception: pass
             if len(og_faces) > 1 and len(combined.Vertices) > 0:
                 try:
